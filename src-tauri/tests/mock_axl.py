@@ -17,6 +17,17 @@ Behaviour is driven by the SQL text so one server can exercise every branch:
   SELECT ... weirdns          -> different namespace prefixes (SOAP-ENV:/axl:)
   SELECT ... big              -> 20000 rows (throughput / virtualization feed)
 
+Throttle emulation (the real UCM caps executeSQLQuery responses at 8 MB):
+  SELECT ... throttle         -> honours Informix SKIP/FIRST against a 2816-row set:
+                                   no FIRST     -> "Query request too large" fault
+                                   FIRST > 843  -> throttle fault again, which
+                                                   exercises adaptive batch halving
+                                   FIRST <= 843 -> that slice of the 2816 rows
+  SELECT ... throttlealt      -> same fault using Cisco's OTHER documented wording
+                                 ("Suggestive Row Fetch") to test lenient parsing
+  SELECT ... throttlenonum    -> "Query request too large" with no parseable numbers
+  SELECT ... unavailable      -> HTTP 503 (UCM request throttling)
+
 Credentials: axluser / axlpass. Anything else -> 401.
 Username "forbidden" -> 403.
 
@@ -77,6 +88,54 @@ FAULT = """<?xml version="1.0" encoding="UTF-8"?>
 </soapenv:Fault>
 </soapenv:Body>
 </soapenv:Envelope>"""
+
+
+# The real UCM throttle fault. Per Cisco's AXL Developer Guide the response body
+# is a SOAP Fault with HTTP 500, faultcode soapenv:Server, and an axlError detail
+# carrying axlcode -1. The faultstring wording is templated because Cisco's own
+# docs render it both as "Suggested row fetch" and "Suggestive Row Fetch".
+THROTTLE_FAULT = """<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/">
+<soapenv:Body>
+<soapenv:Fault>
+<faultcode>soapenv:Server</faultcode>
+<faultstring>{msg}</faultstring>
+<detail>
+<axlError><axlcode>-1</axlcode><axlmessage>{msg}</axlmessage></axlError>
+</detail>
+</soapenv:Fault>
+</soapenv:Body>
+</soapenv:Envelope>"""
+
+THROTTLE_TOTAL = 2816
+THROTTLE_SUGGESTED = 844  # "less than 844" -> a client may fetch at most 843
+
+
+def throttle_msg(wording="Suggested row fetch"):
+    return (
+        f"Query request too large. Total rows matched: {THROTTLE_TOTAL} rows. "
+        f"{wording}: less than {THROTTLE_SUGGESTED} rows"
+    )
+
+
+def parse_skip_first(sql):
+    """Pull Informix SKIP n / FIRST m out of the statement, if present."""
+    skip = re.search(r"\bskip\s+(\d+)", sql)
+    first = re.search(r"\bfirst\s+(\d+)", sql)
+    return (
+        int(skip.group(1)) if skip else 0,
+        int(first.group(1)) if first else None,
+    )
+
+
+def rows_slice(skip, first, total=THROTTLE_TOTAL):
+    """A deterministic `total`-row set, sliced the way Informix would."""
+    end = min(skip + first, total)
+    return "".join(
+        f"<row><pkid>pk-{i}</pkid><name>SEP{i:012d}</name>"
+        f"<description>Throttled device {i}</description></row>"
+        for i in range(min(skip, total), end)
+    )
 
 
 def rows_normal():
@@ -156,7 +215,26 @@ class Handler(BaseHTTPRequestHandler):
         sql = (m.group(1) if m else "").lower()
         self.log_message("sql=%.80s", sql.replace("\n", " "))
 
-        if "fault" in sql:
+        # NOTE: order matters — the more specific throttle* branches must be
+        # tested before the bare "throttle" substring match.
+        if "throttlealt" in sql:
+            self._send(500, THROTTLE_FAULT.format(
+                msg=throttle_msg("Suggestive Row Fetch")).encode())
+        elif "throttlenonum" in sql:
+            self._send(500, THROTTLE_FAULT.format(
+                msg="Query request too large.").encode())
+        elif "throttle" in sql:
+            skip, first = parse_skip_first(sql)
+            if first is None or first >= THROTTLE_SUGGESTED:
+                # Unpaged, or the batch is still too big -> throttle again.
+                self._send(500, THROTTLE_FAULT.format(msg=throttle_msg()).encode())
+            else:
+                self.log_message("paging skip=%d first=%d", skip, first)
+                self._send(200, ENVELOPE.format(
+                    rows=rows_slice(skip, first)).encode())
+        elif "unavailable" in sql:
+            self._send(503, b"Service Unavailable", "text/plain")
+        elif "fault" in sql:
             self._send(500, FAULT.encode())
         elif "slow" in sql:
             time.sleep(90)

@@ -12,6 +12,7 @@ import { Field } from "../components/ui/Field";
 import { Input } from "../components/ui/Input";
 import { Kbd, MOD_KEY } from "../components/ui/Kbd";
 import { Spinner } from "../components/ui/Spinner";
+import { Switch } from "../components/ui/Switch";
 import { Tip } from "../components/ui/Tooltip";
 import { errMsg } from "../lib/utils";
 import { useFavoritesStore } from "../stores/favorites";
@@ -31,6 +32,8 @@ export function QueryView() {
 
   const bookmarkOpen = useUiStore((s) => s.bookmarkOpen);
   const setBookmarkOpen = useUiStore((s) => s.setBookmarkOpen);
+  const autoBatch = useUiStore((s) => s.autoBatch);
+  const setAutoBatch = useUiStore((s) => s.setAutoBatch);
 
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const onRun = useCallback(() => void useQueryStore.getState().run(), []);
@@ -47,7 +50,7 @@ export function QueryView() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {running ? (
             <Button variant="primary" onClick={() => void cancel()} className="min-w-24">
               <Square className="size-3.5" fill="currentColor" />
@@ -97,6 +100,19 @@ export function QueryView() {
               querying…
             </span>
           )}
+
+          <div className="grow" />
+
+          <Tip content="When UCM's 8 MB cap throttles a query, start the batched fetch immediately instead of asking first.">
+            <label className="flex cursor-pointer items-center gap-2 text-xs text-mut select-none">
+              <Switch
+                checked={autoBatch}
+                onCheckedChange={setAutoBatch}
+                aria-label="Auto-fetch throttled queries in batches"
+              />
+              Auto-fetch throttled queries in batches
+            </label>
+          </Tip>
         </div>
 
         <RunStatus />

@@ -14,11 +14,14 @@ use tauri::{Manager, State};
 use uuid::Uuid;
 
 use db::{Db, Favorite, Ucm, UcmInput};
-use query::RunRegistry;
+use query::{RunRegistry, ThrottleStash};
 
 pub struct AppState {
     pub db: Arc<Db>,
     pub registry: Arc<RunRegistry>,
+    /// Latest ThrottleInfo per (runId, ucmId); lets `fetch_target_batched`
+    /// report the true total in its progress events.
+    pub throttles: Arc<ThrottleStash>,
 }
 
 fn now_rfc3339() -> String {
@@ -161,6 +164,7 @@ pub fn run() {
             app.manage(AppState {
                 db: Arc::new(db),
                 registry: Arc::new(RunRegistry::default()),
+                throttles: Arc::new(ThrottleStash::default()),
             });
             Ok(())
         })
@@ -176,6 +180,7 @@ pub fn run() {
             delete_favorite,
             query::run_query,
             query::cancel_query,
+            query::fetch_target_batched,
             export::export_csv,
         ])
         .run(tauri::generate_context!())

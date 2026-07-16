@@ -87,5 +87,35 @@ export interface QueryCompletePayload {
   runId: string;
   okCount: number;
   errCount: number;
+  throttledCount: number;
   totalRows: number;
+}
+
+// ---- UCM 8 MB throttle handling (CONTRACT-THROTTLE.md) ----
+
+export interface ThrottleInfo {
+  totalRows: number; // "Total rows matched: N"
+  suggestedFetch: number; // "Suggested row fetch: less than M" (M itself)
+  batchSize: number; // what AXLRows will actually use; <= suggestedFetch - 1
+  batches: number; // ceil(totalRows / batchSize)
+  canPaginate: boolean; // false => the SQL can't be safely rewritten
+  reason?: string; // present iff canPaginate === false; user-facing
+}
+
+export interface TargetThrottledPayload {
+  runId: string;
+  ucmId: string;
+  ucmName: string;
+  elapsedMs: number;
+  throttle: ThrottleInfo;
+}
+
+export interface TargetBatchProgressPayload {
+  runId: string;
+  ucmId: string;
+  ucmName: string;
+  batchIndex: number; // 1-based
+  batches: number;
+  fetched: number;
+  total: number;
 }

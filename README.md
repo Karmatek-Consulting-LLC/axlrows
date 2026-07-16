@@ -35,12 +35,46 @@ Constructing it directly in Rust deleted the entire schema tree.
   Each target reports independently; one server 401ing doesn't kill the run.
 - **Results grid** -- sort, per-column filter, global search, column visibility,
   CSV export via a native save dialog. Every row is tagged with the UCM it came from.
+- **Throttle handling** -- UCM caps `executeSQLQuery` responses at 8 MB. When a query
+  trips that cap, AXLRows reads the row count out of the fault and offers to fetch the
+  whole set in batches. See [Large result sets](#large-result-sets).
 - **Favorites** -- name, save, edit, and re-run queries.
 - **Servers** -- add/edit/delete UCM publishers, per-server TLS verification toggle,
   and a connection test that reports latency.
 - **Keyboard-first** -- `Ctrl/Cmd+Enter` runs, `Ctrl/Cmd+K` opens the command palette,
   `Ctrl/Cmd+1/2/3` switches views.
 - **Light and dark themes**, persisted.
+
+## Large result sets
+
+Cisco UCM caps `executeSQLQuery` responses at **8 MB of data** (not a row count) and
+rejects anything larger with a SOAP fault:
+
+```
+Query request too large. Total rows matched: 2816 rows. Suggested row fetch: less than 844 rows
+```
+
+SeaQuill surfaced this as a dead end. AXLRows parses the fault and offers a one-click
+**Fetch all 2,816 in 4 batches**, which re-runs the query with Informix
+`SELECT SKIP n FIRST m` paging and merges the batches back into the grid. Rows from
+other publishers in the same run are left untouched.
+
+- The batch size comes from UCM's own suggestion. Because that suggestion is an
+  estimate derived from average row width, a batch can still exceed 8 MB -- so the
+  batch size **halves adaptively** and retries until it fits.
+- Batching is cancellable, and progress is reported per batch.
+- Queries that can't be rewritten safely (a top-level `UNION`/`INTERSECT`/`MINUS`, or
+  one that already has its own `SKIP`/`FIRST`/`LIMIT`) are not paginated. AXLRows says
+  why instead of silently mangling your SQL.
+- **Auto-fetch throttled queries in batches** is available as a setting, off by
+  default -- so a query matching millions of rows can't quietly fire thousands of
+  requests at a production publisher.
+
+A note on ordering: Informix does not guarantee a stable row order across
+`SKIP`/`FIRST` batches unless the query has an `ORDER BY`, so in theory a batched
+fetch could duplicate or drop rows. In a decade of practice against UCM this has not
+been a problem -- UCM config tables are effectively static while you query them -- so
+AXLRows does not require or inject an `ORDER BY`. Add one if you want the guarantee.
 
 ## Security
 

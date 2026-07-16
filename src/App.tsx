@@ -41,6 +41,8 @@ export default function App() {
       ipc.onTargetStarted((p) => useQueryStore.getState()._onStarted(p)),
       ipc.onTargetSuccess((p) => useQueryStore.getState()._onSuccess(p)),
       ipc.onTargetError((p) => useQueryStore.getState()._onError(p)),
+      ipc.onTargetThrottled((p) => useQueryStore.getState()._onThrottled(p)),
+      ipc.onTargetBatchProgress((p) => useQueryStore.getState()._onBatchProgress(p)),
       ipc.onQueryComplete((p) => useQueryStore.getState()._onComplete(p)),
     ];
     void q; // silence unused if tree-shaken

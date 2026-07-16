@@ -8,9 +8,11 @@ import type {
   Favorite,
   QueryCompletePayload,
   Row,
+  TargetBatchProgressPayload,
   TargetErrorPayload,
   TargetStartedPayload,
   TargetSuccessPayload,
+  TargetThrottledPayload,
   Ucm,
 } from "./types";
 
@@ -24,7 +26,7 @@ const rand = (min: number, max: number) => min + Math.random() * (max - min);
 
 type MockUcm = Ucm & {
   /** Scripted behavior for query runs. */
-  behavior: "big" | "medium" | "unauthorized" | "empty";
+  behavior: "big" | "medium" | "unauthorized" | "empty" | "throttle" | "throttle-nopage";
   password: string | null;
 };
 
@@ -75,6 +77,30 @@ let ucms: MockUcm[] = [
     hasPassword: true,
     createdAt: "2026-04-07T08:12:00Z",
     behavior: "empty",
+    password: "secret",
+  },
+  {
+    id: "u-eu-pub",
+    name: "EU-PUB",
+    host: "cucm-eu.corp.example",
+    username: "axladmin",
+    version: "15.0",
+    verifyTls: true,
+    hasPassword: true,
+    createdAt: "2026-05-14T11:02:00Z",
+    behavior: "throttle", // 8 MB cap: 2816 rows matched, batches of 843
+    password: "secret",
+  },
+  {
+    id: "u-apac-pub",
+    name: "APAC-PUB",
+    host: "10.60.20.1",
+    username: "axladmin",
+    version: "14.0",
+    verifyTls: false,
+    hasPassword: true,
+    createdAt: "2026-06-01T07:40:00Z",
+    behavior: "throttle-nopage", // throttled AND the SQL can't be paginated
     password: "secret",
   },
 ];
@@ -149,6 +175,42 @@ function mediumRows(n: number): { columns: string[]; rows: Row[] } {
   return { columns, rows };
 }
 
+// The throttling target mirrors the verified mock_axl.py facts: 2816 rows
+// matched, "less than 844" suggested -> batchSize 843 -> 4 batches of
+// 843 + 843 + 843 + 287, pkids pk-0 .. pk-2815.
+const THROTTLE_TOTAL = 2816;
+const THROTTLE_SUGGESTED = 844;
+const THROTTLE_COLUMNS = ["pkid", "name", "description", "devicepool", "model", "status"];
+
+function throttleInfo(canPaginate: boolean, reason?: string) {
+  const batchSize = THROTTLE_SUGGESTED - 1;
+  return {
+    totalRows: THROTTLE_TOTAL,
+    suggestedFetch: THROTTLE_SUGGESTED,
+    batchSize,
+    batches: Math.ceil(THROTTLE_TOTAL / batchSize),
+    canPaginate,
+    ...(reason !== undefined ? { reason } : {}),
+  };
+}
+
+/** One SKIP/FIRST page of the throttled target's 2816-row result set. */
+function throttlePage(skip: number, first: number): Row[] {
+  const end = Math.min(skip + first, THROTTLE_TOTAL);
+  const rows: Row[] = [];
+  for (let i = skip; i < end; i++) {
+    rows.push({
+      pkid: `pk-${i}`,
+      name: `SEP${(0xc0000000000 + i * 6151).toString(16).toUpperCase().slice(0, 12)}`,
+      description: i % 13 === 0 ? "" : `EU phone ${i + 1}`,
+      devicepool: POOLS[i % POOLS.length],
+      model: MODELS[(i + 2) % MODELS.length],
+      status: STATUS[i % STATUS.length],
+    });
+  }
+  return rows;
+}
+
 // ---- event plumbing ----------------------------------------------------
 
 type Handler<T> = (p: T) => void;
@@ -156,6 +218,8 @@ const listeners = {
   started: new Set<Handler<TargetStartedPayload>>(),
   success: new Set<Handler<TargetSuccessPayload>>(),
   error: new Set<Handler<TargetErrorPayload>>(),
+  throttled: new Set<Handler<TargetThrottledPayload>>(),
+  batch: new Set<Handler<TargetBatchProgressPayload>>(),
   complete: new Set<Handler<QueryCompletePayload>>(),
 };
 const on = <T>(set: Set<Handler<T>>, cb: Handler<T>): Promise<UnlistenFn> => {
@@ -166,7 +230,18 @@ const emit = <T>(set: Set<Handler<T>>, p: T) => set.forEach((cb) => cb(p));
 
 const cancelled = new Set<string>();
 
-async function runTarget(runId: string, ucm: MockUcm, sql: string, timeoutSecs: number) {
+interface TargetOutcome {
+  ok: boolean;
+  rows: number;
+  throttled?: boolean;
+}
+
+async function runTarget(
+  runId: string,
+  ucm: MockUcm,
+  sql: string,
+  timeoutSecs: number,
+): Promise<TargetOutcome> {
   await sleep(rand(60, 350));
   if (cancelled.has(runId)) return { ok: false, rows: 0 };
   emit(listeners.started, { runId, ucmId: ucm.id, ucmName: ucm.name });
@@ -174,7 +249,7 @@ async function runTarget(runId: string, ucm: MockUcm, sql: string, timeoutSecs: 
   const started = performance.now();
   // "small" anywhere in the SQL keeps the big target modest — handy in dev.
   const bigN = /\bsmall\b/i.test(sql) ? 320 : 20_000;
-  let outcome: { ok: boolean; rows: number };
+  let outcome: TargetOutcome;
 
   switch (ucm.behavior) {
     case "big": {
@@ -220,11 +295,41 @@ async function runTarget(runId: string, ucm: MockUcm, sql: string, timeoutSecs: 
       outcome = { ok: true, rows: 0 };
       break;
     }
+    case "throttle": {
+      await sleep(rand(700, 1600));
+      if (cancelled.has(runId)) return timeoutErr(runId, ucm, started, timeoutSecs);
+      emit(listeners.throttled, {
+        runId, ucmId: ucm.id, ucmName: ucm.name,
+        elapsedMs: Math.round(performance.now() - started),
+        throttle: throttleInfo(true),
+      });
+      outcome = { ok: false, rows: 0, throttled: true };
+      break;
+    }
+    case "throttle-nopage": {
+      await sleep(rand(700, 1600));
+      if (cancelled.has(runId)) return timeoutErr(runId, ucm, started, timeoutSecs);
+      emit(listeners.throttled, {
+        runId, ucmId: ucm.id, ucmName: ucm.name,
+        elapsedMs: Math.round(performance.now() - started),
+        throttle: throttleInfo(
+          false,
+          "The query contains a top-level UNION — AXLRows can't rewrite it with SKIP/FIRST safely.",
+        ),
+      });
+      outcome = { ok: false, rows: 0, throttled: true };
+      break;
+    }
   }
   return outcome;
 }
 
-function timeoutErr(runId: string, ucm: MockUcm, started: number, timeoutSecs: number) {
+function timeoutErr(
+  runId: string,
+  ucm: MockUcm,
+  started: number,
+  timeoutSecs: number,
+): TargetOutcome {
   emit(listeners.error, {
     runId, ucmId: ucm.id, ucmName: ucm.name,
     message: `Query timed out after ${timeoutSecs}s.`,
@@ -332,10 +437,12 @@ export const mockClient: IpcClient = {
     void (async () => {
       const results = await Promise.all(targets.map((u) => runTarget(runId, u, sql, timeoutSecs)));
       const okCount = results.filter((r) => r.ok).length;
+      const throttledCount = results.filter((r) => r.throttled).length;
       emit(listeners.complete, {
         runId,
         okCount,
-        errCount: results.length - okCount,
+        errCount: results.length - okCount - throttledCount,
+        throttledCount,
         totalRows: results.reduce((s, r) => s + r.rows, 0),
       });
       cancelled.delete(runId);
@@ -347,6 +454,43 @@ export const mockClient: IpcClient = {
     cancelled.add(runId);
   },
 
+  async fetchTargetBatched(runId, ucmId, _sql, batchSize) {
+    const ucm = ucms.find((u) => u.id === ucmId);
+    if (!ucm) throw `No UCM with id ${ucmId}`;
+    if (batchSize < 1) throw "batchSize must be >= 1";
+    cancelled.delete(runId); // a fresh fetch inside the existing run
+    // Background like run_query: the invoke resolves immediately, rows stream in.
+    void (async () => {
+      emit(listeners.started, { runId, ucmId: ucm.id, ucmName: ucm.name });
+      const started = performance.now();
+      const batches = Math.ceil(THROTTLE_TOTAL / batchSize);
+      const all: Row[] = [];
+      for (let i = 0; i < batches; i++) {
+        await sleep(rand(500, 950));
+        if (cancelled.has(runId)) {
+          emit(listeners.error, {
+            runId, ucmId: ucm.id, ucmName: ucm.name,
+            message: "Cancelled.",
+            elapsedMs: Math.round(performance.now() - started),
+          });
+          return;
+        }
+        all.push(...throttlePage(i * batchSize, batchSize));
+        emit(listeners.batch, {
+          runId, ucmId: ucm.id, ucmName: ucm.name,
+          batchIndex: i + 1, batches, fetched: all.length, total: THROTTLE_TOTAL,
+        });
+      }
+      await sleep(250); // let the final batch tick render before the merge
+      emit(listeners.success, {
+        runId, ucmId: ucm.id, ucmName: ucm.name,
+        columns: THROTTLE_COLUMNS, rows: all,
+        elapsedMs: Math.round(performance.now() - started),
+      });
+      // No query://complete — the run already completed (CONTRACT-THROTTLE.md).
+    })();
+  },
+
   async exportCsv(columns, rows, suggestedName) {
     await sleep(600); // pretend a save dialog happened
     console.info(`[mock] export_csv: ${columns.length} cols x ${rows.length} rows -> ${suggestedName}`);
@@ -356,5 +500,7 @@ export const mockClient: IpcClient = {
   onTargetStarted: (cb) => on(listeners.started, cb),
   onTargetSuccess: (cb) => on(listeners.success, cb),
   onTargetError: (cb) => on(listeners.error, cb),
+  onTargetThrottled: (cb) => on(listeners.throttled, cb),
+  onTargetBatchProgress: (cb) => on(listeners.batch, cb),
   onQueryComplete: (cb) => on(listeners.complete, cb),
 };

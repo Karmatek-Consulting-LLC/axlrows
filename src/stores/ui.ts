@@ -4,6 +4,7 @@ export type View = "query" | "favorites" | "servers";
 export type Theme = "dark" | "light";
 
 const THEME_KEY = "axlrows.theme";
+const AUTO_BATCH_KEY = "axlrows.autoBatch";
 
 function initialTheme(): Theme {
   const saved = localStorage.getItem(THEME_KEY);
@@ -27,6 +28,9 @@ interface UiState {
   /** "Bookmark current query" dialog (lives in QueryView; opened from anywhere). */
   bookmarkOpen: boolean;
   setBookmarkOpen: (open: boolean) => void;
+  /** Auto-fetch throttled queries in batches (default OFF — explicit click). */
+  autoBatch: boolean;
+  setAutoBatch: (on: boolean) => void;
 }
 
 export const useUiStore = create<UiState>((set, get) => ({
@@ -43,6 +47,11 @@ export const useUiStore = create<UiState>((set, get) => ({
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
   bookmarkOpen: false,
   setBookmarkOpen: (bookmarkOpen) => set({ bookmarkOpen }),
+  autoBatch: localStorage.getItem(AUTO_BATCH_KEY) === "true",
+  setAutoBatch: (autoBatch) => {
+    localStorage.setItem(AUTO_BATCH_KEY, String(autoBatch));
+    set({ autoBatch });
+  },
 }));
 
 // Apply persisted theme immediately at module load (before first paint).

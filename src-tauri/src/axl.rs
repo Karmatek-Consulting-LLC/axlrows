@@ -4,10 +4,13 @@
 //! namespace prefixes vary across UCM versions.
 
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use quick_xml::events::Event;
 use quick_xml::Reader;
+use regex::Regex;
+use serde::Serialize;
 use thiserror::Error;
 
 /// A result row: flat string map. Every value is stringified; null -> "".
@@ -38,6 +41,80 @@ pub enum AxlError {
     Http(u16, String),
     #[error("Could not parse the AXL response: {0}")]
     Parse(String),
+    /// UCM's request throttle (Cisco documents 503 as the write-throttle
+    /// response; reads can see it under load).
+    #[error("UCM is throttling requests right now (HTTP 503) — wait a moment and retry.")]
+    ServiceUnavailable,
+    /// UCM's 8 MB response cap tripped ("Query request too large. ...").
+    #[error("Query request too large — UCM caps executeSQLQuery responses at 8 MB.")]
+    Throttled(ThrottleInfo),
+}
+
+/// Everything the frontend needs to explain a throttled target and offer a
+/// batched re-fetch. Serialized camelCase into the `target-throttled` event.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThrottleInfo {
+    /// "Total rows matched: N"
+    pub total_rows: u64,
+    /// "Suggested row fetch: less than M" — M itself (an exclusive bound).
+    pub suggested_fetch: u64,
+    /// What AXLRows will actually use: `suggested_fetch - 1`, clamped to >= 1.
+    pub batch_size: u64,
+    /// `ceil(total_rows / batch_size)`.
+    pub batches: u64,
+    /// false => the SQL cannot be safely rewritten for paging.
+    pub can_paginate: bool,
+    /// Present iff `can_paginate` is false; user-facing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+pub const THROTTLE_NO_NUMBERS_REASON: &str =
+    "UCM did not report a row count for this query.";
+
+static TOTAL_ROWS_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)total\s+rows\s+matched:\s*(\d+)").unwrap());
+// Cisco's docs render the phrase both as "Suggested row fetch" and
+// "Suggestive Row Fetch" — `suggest\w*` accepts either. Parse leniently.
+static SUGGESTED_FETCH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)suggest\w*\s+row\s+fetch:\s*less\s+than\s*(\d+)").unwrap());
+
+/// Turn a SOAP faultstring into the right error: UCM's 8 MB throttle fault
+/// becomes `Throttled` (parsed leniently); everything else stays a verbatim
+/// `Fault`.
+fn classify_fault(faultstring: String) -> AxlError {
+    if !faultstring.to_lowercase().contains("query request too large") {
+        return AxlError::Fault(faultstring);
+    }
+    let capture = |re: &Regex| {
+        re.captures(&faultstring)
+            .and_then(|c| c.get(1))
+            .and_then(|m| m.as_str().parse::<u64>().ok())
+    };
+    let info = match (capture(&TOTAL_ROWS_RE), capture(&SUGGESTED_FETCH_RE)) {
+        (Some(total_rows), Some(suggested_fetch)) => {
+            // "less than M" is exclusive -> start at M - 1, clamped to >= 1.
+            let batch_size = suggested_fetch.saturating_sub(1).max(1);
+            ThrottleInfo {
+                total_rows,
+                suggested_fetch,
+                batch_size,
+                batches: total_rows.div_ceil(batch_size),
+                can_paginate: true,
+                reason: None,
+            }
+        }
+        _ => ThrottleInfo {
+            total_rows: 0,
+            suggested_fetch: 0,
+            batch_size: 0,
+            batches: 0,
+            can_paginate: false,
+            reason: Some(THROTTLE_NO_NUMBERS_REASON.to_string()),
+        },
+    };
+    AxlError::Throttled(info)
 }
 
 /// Connection parameters for a single request. The password is pulled from
@@ -246,22 +323,244 @@ pub async fn execute_sql_query(
     match status.as_u16() {
         401 => return Err(AxlError::Unauthorized),
         403 => return Err(AxlError::Forbidden),
+        // Cisco documents 503 as UCM's request-throttling response.
+        503 => return Err(AxlError::ServiceUnavailable),
         _ => {}
     }
 
     let body = response.text().await.map_err(map_send_err)?;
 
     if status.is_success() {
-        parse_response(&body)
+        parse_response(&body).map_err(|e| match e {
+            AxlError::Fault(fault) => classify_fault(fault),
+            other => other,
+        })
     } else {
-        // AXL reports SOAP Faults with HTTP 500; prefer the faultstring.
+        // AXL reports SOAP Faults with HTTP 500; prefer the faultstring
+        // (classified, so the 8 MB throttle fault becomes `Throttled`).
         if let Err(AxlError::Fault(fault)) = parse_response(&body) {
-            return Err(AxlError::Fault(fault));
+            return Err(classify_fault(fault));
         }
         Err(AxlError::Http(
             status.as_u16(),
             status.canonical_reason().unwrap_or("").to_string(),
         ))
+    }
+}
+
+// ---- Informix paging (the remedy for UCM's 8 MB throttle) ----
+
+/// A word token from a light SQL scan: lowercased text, byte range, and the
+/// parenthesis depth it appeared at. Quoted strings ('...', with '' escapes)
+/// and quoted identifiers ("...") are skipped entirely.
+struct SqlToken {
+    text: String,
+    start: usize,
+    end: usize,
+    depth: usize,
+}
+
+fn sql_tokens(sql: &str) -> Vec<SqlToken> {
+    let bytes = sql.as_bytes();
+    let mut tokens = Vec::new();
+    let mut depth = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            quote @ (b'\'' | b'"') => {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == quote {
+                        // A doubled quote is an escape; stay in the literal.
+                        if bytes.get(i + 1) == Some(&quote) {
+                            i += 2;
+                            continue;
+                        }
+                        break;
+                    }
+                    i += 1;
+                }
+                i += 1; // past the closing quote (or EOF)
+            }
+            b'(' => {
+                depth += 1;
+                i += 1;
+            }
+            b')' => {
+                depth = depth.saturating_sub(1);
+                i += 1;
+            }
+            c if c.is_ascii_alphanumeric() || c == b'_' => {
+                let start = i;
+                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                    i += 1;
+                }
+                tokens.push(SqlToken {
+                    text: sql[start..i].to_ascii_lowercase(),
+                    start,
+                    end: i,
+                    depth,
+                });
+            }
+            _ => i += 1,
+        }
+    }
+    tokens
+}
+
+/// Rewrite a SELECT for Informix paging: inject `SKIP {skip} FIRST {first} `
+/// before the select list (after ALL/DISTINCT/UNIQUE when present).
+/// Deliberately conservative — refusing with a user-facing reason beats
+/// silently corrupting a query.
+pub fn paginate_sql(sql: &str, skip: u64, first: u64) -> Result<String, String> {
+    // Trim whitespace and any trailing semicolons.
+    let mut s = sql.trim();
+    while let Some(stripped) = s.strip_suffix(';') {
+        s = stripped.trim_end();
+    }
+
+    let tokens = sql_tokens(s);
+
+    // Must literally begin with the SELECT keyword (word boundary).
+    if !tokens
+        .first()
+        .is_some_and(|t| t.start == 0 && t.text == "select")
+    {
+        return Err("Only SELECT statements can be fetched in batches.".to_string());
+    }
+
+    // A top-level set operator means SKIP/FIRST would apply to a single arm,
+    // silently changing the result. (Inside parentheses or string literals
+    // the words are harmless.)
+    if tokens
+        .iter()
+        .any(|t| t.depth == 0 && matches!(t.text.as_str(), "union" | "intersect" | "minus"))
+    {
+        return Err(
+            "Queries with UNION, INTERSECT, or MINUS can't be paginated automatically."
+                .to_string(),
+        );
+    }
+
+    // Injection point: right after SELECT, or after ALL / DISTINCT / UNIQUE.
+    let mut inject_after = tokens[0].end;
+    let mut next = 1;
+    if let Some(tok) = tokens.get(next) {
+        if matches!(tok.text.as_str(), "all" | "distinct" | "unique") {
+            inject_after = tok.end;
+            next += 1;
+        }
+    }
+    // Never double-inject over an existing row limit.
+    if let Some(tok) = tokens.get(next) {
+        if matches!(tok.text.as_str(), "skip" | "first" | "limit") {
+            return Err(
+                "The query already limits rows with SKIP/FIRST/LIMIT — edit it manually instead."
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(format!(
+        "{} SKIP {skip} FIRST {first} {}",
+        &s[..inject_after],
+        s[inject_after..].trim_start()
+    ))
+}
+
+/// Progress snapshot handed to the batch callback after each completed batch.
+#[derive(Debug, Clone, Copy)]
+pub struct BatchProgress {
+    /// 1-based index of the batch that just completed.
+    pub batch_index: u64,
+    /// Best current estimate of the total number of batches.
+    pub batches: u64,
+    /// Rows accumulated so far.
+    pub fetched: u64,
+    /// Best current estimate of the total row count.
+    pub total: u64,
+}
+
+/// Maximum number of adaptive batch-size halvings before giving up.
+pub const MAX_HALVINGS: u32 = 5;
+
+/// Fetch a throttled query in SKIP/FIRST batches, merging every page into a
+/// single result (columns are the union across batches, in first-seen
+/// order). `total_hint` — from the original throttle fault — drives the
+/// progress estimates until the server tells us better.
+///
+/// Row sizes vary, so UCM's suggested batch size is only an estimate: if a
+/// batch itself throttles, the batch size is halved and the SAME batch
+/// retried, up to [`MAX_HALVINGS`] times; subsequent batches continue at the
+/// reduced size. If it still throttles at the floor, the throttle error is
+/// returned.
+pub async fn fetch_batched(
+    target: &AxlTarget,
+    sql: &str,
+    initial_batch_size: u64,
+    total_hint: Option<u64>,
+    timeout_secs: u64,
+    mut on_batch: impl FnMut(BatchProgress),
+) -> Result<QueryResult, AxlError> {
+    let mut batch = initial_batch_size.max(1);
+    let mut total = total_hint;
+    let mut halvings = 0u32;
+    let mut skip: u64 = 0;
+    let mut batch_index: u64 = 0;
+    let mut columns: Vec<String> = Vec::new();
+    let mut rows: Vec<Row> = Vec::new();
+
+    loop {
+        let paged = paginate_sql(sql, skip, batch).map_err(AxlError::Fault)?;
+        match execute_sql_query(target, &paged, timeout_secs).await {
+            Ok(page) => {
+                let got = page.rows.len() as u64;
+                for col in page.columns {
+                    if !columns.contains(&col) {
+                        columns.push(col);
+                    }
+                }
+                rows.extend(page.rows);
+                batch_index += 1;
+                skip += got;
+                let fetched = rows.len() as u64;
+
+                // A short (or empty) page is definitive; a known total also
+                // lets us skip a trailing empty request.
+                let done = got < batch || total.is_some_and(|t| fetched >= t);
+
+                let (batches, total_est) = match total {
+                    Some(t) => {
+                        let remaining = t.saturating_sub(fetched);
+                        (batch_index + remaining.div_ceil(batch), t.max(fetched))
+                    }
+                    None if done => (batch_index, fetched),
+                    None => (batch_index + 1, fetched),
+                };
+                on_batch(BatchProgress {
+                    batch_index,
+                    batches,
+                    fetched,
+                    total: total_est,
+                });
+
+                if done {
+                    return Ok(QueryResult { columns, rows });
+                }
+            }
+            Err(AxlError::Throttled(info)) => {
+                // The fault itself reports the real total; adopt it.
+                if info.total_rows > 0 {
+                    total = Some(info.total_rows);
+                }
+                if halvings >= MAX_HALVINGS || batch == 1 {
+                    return Err(AxlError::Throttled(info));
+                }
+                halvings += 1;
+                batch = (batch / 2).max(1);
+            }
+            Err(e) => return Err(e),
+        }
     }
 }
 
@@ -410,6 +709,147 @@ mod tests {
             AxlError::Http(503, "Service Unavailable".into()).to_string(),
             "AXL returned HTTP 503 Service Unavailable."
         );
+    }
+    // ---- throttle fault classification ----
+
+    #[test]
+    fn throttle_fault_parses_both_documented_wordings() {
+        for wording in ["Suggested row fetch", "Suggestive Row Fetch"] {
+            let err = classify_fault(format!(
+                "Query request too large. Total rows matched: 2816 rows. {wording}: less than 844 rows"
+            ));
+            let AxlError::Throttled(info) = err else {
+                panic!("expected Throttled for wording {wording:?}");
+            };
+            assert_eq!(info.total_rows, 2816);
+            assert_eq!(info.suggested_fetch, 844);
+            assert_eq!(info.batch_size, 843, "exclusive bound: less than 844 -> 843");
+            assert_eq!(info.batches, 4);
+            assert!(info.can_paginate);
+            assert_eq!(info.reason, None);
+        }
+    }
+
+    #[test]
+    fn throttle_fault_without_numbers_is_not_paginatable() {
+        let err = classify_fault("Query request too large.".to_string());
+        let AxlError::Throttled(info) = err else {
+            panic!("expected Throttled");
+        };
+        assert!(!info.can_paginate);
+        assert_eq!(info.reason.as_deref(), Some(THROTTLE_NO_NUMBERS_REASON));
+    }
+
+    #[test]
+    fn throttle_batch_size_clamps_to_at_least_one() {
+        let err = classify_fault(
+            "Query request too large. Total rows matched: 5 rows. Suggested row fetch: less than 1 rows"
+                .to_string(),
+        );
+        let AxlError::Throttled(info) = err else {
+            panic!("expected Throttled");
+        };
+        assert_eq!(info.batch_size, 1);
+        assert_eq!(info.batches, 5);
+    }
+
+    #[test]
+    fn non_throttle_fault_stays_a_verbatim_fault() {
+        let err = classify_fault("A syntax error has occurred.".to_string());
+        assert_eq!(
+            err,
+            AxlError::Fault("A syntax error has occurred.".to_string())
+        );
+    }
+
+    #[test]
+    fn service_unavailable_message_matches_the_addendum() {
+        assert_eq!(
+            AxlError::ServiceUnavailable.to_string(),
+            "UCM is throttling requests right now (HTTP 503) — wait a moment and retry."
+        );
+    }
+
+    // ---- paginate_sql ----
+
+    #[test]
+    fn paginate_plain_select() {
+        assert_eq!(
+            paginate_sql("SELECT * FROM device", 0, 843).unwrap(),
+            "SELECT SKIP 0 FIRST 843 * FROM device"
+        );
+    }
+
+    #[test]
+    fn paginate_injects_after_all_distinct_unique() {
+        assert_eq!(
+            paginate_sql("SELECT DISTINCT name FROM device", 843, 843).unwrap(),
+            "SELECT DISTINCT SKIP 843 FIRST 843 name FROM device"
+        );
+        assert_eq!(
+            paginate_sql("select all name from device", 0, 10).unwrap(),
+            "select all SKIP 0 FIRST 10 name from device"
+        );
+        assert_eq!(
+            paginate_sql("select unique name from device", 0, 10).unwrap(),
+            "select unique SKIP 0 FIRST 10 name from device"
+        );
+    }
+
+    #[test]
+    fn paginate_lowercase_select() {
+        assert_eq!(
+            paginate_sql("select pkid from device", 10, 20).unwrap(),
+            "select SKIP 10 FIRST 20 pkid from device"
+        );
+    }
+
+    #[test]
+    fn paginate_strips_trailing_semicolons_and_whitespace() {
+        assert_eq!(
+            paginate_sql("  select pkid from device ; ", 0, 5).unwrap(),
+            "select SKIP 0 FIRST 5 pkid from device"
+        );
+        assert_eq!(
+            paginate_sql("select pkid from device;;", 0, 5).unwrap(),
+            "select SKIP 0 FIRST 5 pkid from device"
+        );
+    }
+
+    #[test]
+    fn paginate_refuses_top_level_set_operators() {
+        assert!(paginate_sql("select a from t1 union select b from t2", 0, 5).is_err());
+        assert!(paginate_sql("select a from t1 UNION ALL select b from t2", 0, 5).is_err());
+        assert!(paginate_sql("select a from t1 INTERSECT select b from t2", 0, 5).is_err());
+        assert!(paginate_sql("select a from t1 minus select b from t2", 0, 5).is_err());
+        // ... but not when the word only appears inside a string literal
+        assert!(paginate_sql("select a from t1 where name = 'union'", 0, 5).is_ok());
+        // ... or inside parentheses (a subquery arm, not the top level)
+        assert!(
+            paginate_sql(
+                "select a from (select b from t2 union select c from t3) s",
+                0,
+                5
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn paginate_refuses_existing_row_limits() {
+        assert!(paginate_sql("select first 10 pkid from device", 0, 5).is_err());
+        assert!(paginate_sql("select skip 5 pkid from device", 0, 5).is_err());
+        assert!(paginate_sql("SELECT LIMIT 10 pkid FROM device", 0, 5).is_err());
+        assert!(paginate_sql("select distinct first 10 pkid from device", 0, 5).is_err());
+    }
+
+    #[test]
+    fn paginate_refuses_non_select_statements() {
+        assert!(paginate_sql("update device set name = 'x'", 0, 5).is_err());
+        assert!(paginate_sql("delete from device", 0, 5).is_err());
+        assert!(paginate_sql("", 0, 5).is_err());
+        // "selection" starts with "select" but is not the SELECT keyword.
+        assert!(paginate_sql("selection from device", 0, 5).is_err());
     }
 }
 
@@ -679,5 +1119,132 @@ mod live_mock_tests {
             .unwrap_err();
         assert_eq!(err, AxlError::Timeout(2));
         assert_eq!(err.to_string(), "Query timed out after 2s.");
+    }
+
+    // ---- 8 MB throttle handling (contract addendum) ----
+
+    // Addendum test 1: unpaged `select * from throttle` -> Throttled with
+    // totalRows 2816, suggestedFetch 844, batchSize 843, batches 4.
+    #[tokio::test]
+    async fn mock_throttle_fault_parses_into_throttle_info() {
+        let host = mock_or_skip!();
+        let err = run_ok(host, "select * from throttle").await.unwrap_err();
+        let AxlError::Throttled(info) = err else {
+            panic!("expected AxlError::Throttled, got: {err}");
+        };
+        assert_eq!(info.total_rows, 2816);
+        assert_eq!(info.suggested_fetch, 844);
+        assert_eq!(info.batch_size, 843);
+        assert_eq!(info.batches, 4);
+        assert!(info.can_paginate);
+        assert_eq!(info.reason, None);
+    }
+
+    // Addendum test 2: the "Suggestive Row Fetch" wording parses identically.
+    #[tokio::test]
+    async fn mock_throttle_alt_wording_parses_identically() {
+        let host = mock_or_skip!();
+        let err = run_ok(host, "select * from throttlealt").await.unwrap_err();
+        let AxlError::Throttled(info) = err else {
+            panic!("expected AxlError::Throttled, got: {err}");
+        };
+        assert_eq!(info.total_rows, 2816);
+        assert_eq!(info.suggested_fetch, 844);
+        assert_eq!(info.batch_size, 843);
+        assert_eq!(info.batches, 4);
+        assert!(info.can_paginate);
+    }
+
+    // Addendum test 3: a throttle fault without parseable numbers is still a
+    // throttle, but canPaginate=false with a user-facing reason.
+    #[tokio::test]
+    async fn mock_throttle_without_numbers_cannot_paginate() {
+        let host = mock_or_skip!();
+        let err = run_ok(host, "select * from throttlenonum").await.unwrap_err();
+        let AxlError::Throttled(info) = err else {
+            panic!("expected AxlError::Throttled, got: {err}");
+        };
+        assert!(!info.can_paginate);
+        assert_eq!(info.reason.as_deref(), Some(THROTTLE_NO_NUMBERS_REASON));
+    }
+
+    // Addendum test 4 — the core guarantee: a full batched fetch returns
+    // exactly 2816 rows, pk-0 through pk-2815, in order, with no duplicates
+    // and no gaps.
+    #[tokio::test]
+    async fn mock_batched_fetch_returns_every_row_in_order() {
+        let host = mock_or_skip!();
+        let target = target_for(host, "axluser", "axlpass");
+        let mut progress: Vec<BatchProgress> = Vec::new();
+        let r = fetch_batched(
+            &target,
+            "select * from throttle",
+            843,
+            Some(2816),
+            30,
+            |p| progress.push(p),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(r.columns, vec!["pkid", "name", "description"]);
+        assert_eq!(r.rows.len(), 2816, "expected exactly 2816 rows");
+        for (i, row) in r.rows.iter().enumerate() {
+            assert_eq!(
+                row["pkid"],
+                format!("pk-{i}"),
+                "row {i} is out of sequence (duplicate or gap)"
+            );
+        }
+
+        // 4 batches of 843 + 843 + 843 + 287, with stable total/batch counts.
+        assert_eq!(progress.len(), 4);
+        assert_eq!(
+            progress.iter().map(|p| p.fetched).collect::<Vec<_>>(),
+            vec![843, 1686, 2529, 2816]
+        );
+        assert_eq!(
+            progress.iter().map(|p| p.batch_index).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4]
+        );
+        assert!(progress.iter().all(|p| p.batches == 4 && p.total == 2816));
+    }
+
+    // Addendum test 5: an oversized initial batch (900 > 843) throttles,
+    // halves to 450, and still completes with the full ordered row set.
+    #[tokio::test]
+    async fn mock_batched_fetch_halves_oversized_batches() {
+        let host = mock_or_skip!();
+        let target = target_for(host, "axluser", "axlpass");
+        let mut progress: Vec<BatchProgress> = Vec::new();
+        let r = fetch_batched(&target, "select * from throttle", 900, None, 30, |p| {
+            progress.push(p)
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(r.rows.len(), 2816);
+        for (i, row) in r.rows.iter().enumerate() {
+            assert_eq!(row["pkid"], format!("pk-{i}"), "row {i} out of sequence");
+        }
+        // 900 -> throttle -> halved to 450: ceil(2816 / 450) = 7 batches.
+        assert_eq!(progress.len(), 7);
+        assert_eq!(progress[0].fetched, 450);
+        // The retry's throttle fault taught us the real total despite no hint.
+        assert_eq!(progress[0].total, 2816);
+        assert_eq!(progress[0].batches, 7);
+        assert_eq!(progress.last().unwrap().fetched, 2816);
+    }
+
+    // Addendum test 6: HTTP 503 maps to the request-throttling message.
+    #[tokio::test]
+    async fn mock_http_503_maps_to_service_unavailable() {
+        let host = mock_or_skip!();
+        let err = run_ok(host, "select unavailable").await.unwrap_err();
+        assert_eq!(err, AxlError::ServiceUnavailable);
+        assert_eq!(
+            err.to_string(),
+            "UCM is throttling requests right now (HTTP 503) — wait a moment and retry."
+        );
     }
 }

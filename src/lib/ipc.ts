@@ -7,9 +7,11 @@ import type {
   Favorite,
   QueryCompletePayload,
   Row,
+  TargetBatchProgressPayload,
   TargetErrorPayload,
   TargetStartedPayload,
   TargetSuccessPayload,
+  TargetThrottledPayload,
   TestUcmResult,
   Ucm,
   UcmInput,
@@ -32,11 +34,21 @@ export interface IpcClient {
 
   runQuery(sql: string, targetIds: string[], timeoutSecs?: number): Promise<string>;
   cancelQuery(runId: string): Promise<void>;
+  /** Re-run ONE throttled target of an existing run in SKIP/FIRST batches. */
+  fetchTargetBatched(
+    runId: string,
+    ucmId: string,
+    sql: string,
+    batchSize: number,
+    timeoutSecs?: number,
+  ): Promise<void>;
   exportCsv(columns: string[], rows: Row[], suggestedName: string): Promise<string | null>;
 
   onTargetStarted(cb: (p: TargetStartedPayload) => void): Promise<UnlistenFn>;
   onTargetSuccess(cb: (p: TargetSuccessPayload) => void): Promise<UnlistenFn>;
   onTargetError(cb: (p: TargetErrorPayload) => void): Promise<UnlistenFn>;
+  onTargetThrottled(cb: (p: TargetThrottledPayload) => void): Promise<UnlistenFn>;
+  onTargetBatchProgress(cb: (p: TargetBatchProgressPayload) => void): Promise<UnlistenFn>;
   onQueryComplete(cb: (p: QueryCompletePayload) => void): Promise<UnlistenFn>;
 }
 
@@ -55,6 +67,8 @@ const tauriClient: IpcClient = {
   runQuery: (sql, targetIds, timeoutSecs) =>
     invoke<string>("run_query", { sql, targetIds, timeoutSecs }),
   cancelQuery: (runId) => invoke<void>("cancel_query", { runId }),
+  fetchTargetBatched: (runId, ucmId, sql, batchSize, timeoutSecs) =>
+    invoke<void>("fetch_target_batched", { runId, ucmId, sql, batchSize, timeoutSecs }),
   exportCsv: (columns, rows, suggestedName) =>
     invoke<string | null>("export_csv", { columns, rows, suggestedName }),
 
@@ -64,6 +78,10 @@ const tauriClient: IpcClient = {
     listen<TargetSuccessPayload>("query://target-success", (e) => cb(e.payload)),
   onTargetError: (cb) =>
     listen<TargetErrorPayload>("query://target-error", (e) => cb(e.payload)),
+  onTargetThrottled: (cb) =>
+    listen<TargetThrottledPayload>("query://target-throttled", (e) => cb(e.payload)),
+  onTargetBatchProgress: (cb) =>
+    listen<TargetBatchProgressPayload>("query://target-batch-progress", (e) => cb(e.payload)),
   onQueryComplete: (cb) =>
     listen<QueryCompletePayload>("query://complete", (e) => cb(e.payload)),
 };

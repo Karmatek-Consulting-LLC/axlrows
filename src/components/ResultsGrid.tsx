@@ -128,6 +128,7 @@ export function ResultsGrid() {
   const hasRun = targets.length > 0;
   const zeroTargets = targets.filter((t) => t.status === "ok" && t.rowCount === 0);
   const errTargets = targets.filter((t) => t.status === "error");
+  const throttledTargets = targets.filter((t) => t.status === "throttled");
 
   async function exportCsv() {
     const headerFor = (id: string) => (id === UCM_COL ? "ucm" : colName(id));
@@ -176,6 +177,12 @@ export function ResultsGrid() {
               No matching rows for <b className="font-medium text-ink">{t.ucmName}</b>
             </span>
           ))}
+          {throttledTargets.length > 0 && (
+            <span>
+              {throttledTargets.length} target{throttledTargets.length > 1 ? "s" : ""} hit UCM's 8 MB
+              cap — fetch in batches from the panel above.
+            </span>
+          )}
           {errTargets.length > 0 && (
             <span>
               {errTargets.length} target{errTargets.length > 1 ? "s" : ""} failed — see the status
