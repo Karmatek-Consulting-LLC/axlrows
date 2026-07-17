@@ -59,7 +59,8 @@ pub struct ThrottleInfo {
     pub total_rows: u64,
     /// "Suggested row fetch: less than M" — M itself (an exclusive bound).
     pub suggested_fetch: u64,
-    /// What AXLRows will actually use: `suggested_fetch - 1`, clamped to >= 1.
+    /// What AXLRows will actually use: `floor(suggested_fetch /
+    /// THROTTLE_SAFETY_DIVISOR)`, clamped to >= 1.
     pub batch_size: u64,
     /// `ceil(total_rows / batch_size)`.
     pub batches: u64,
@@ -73,12 +74,23 @@ pub struct ThrottleInfo {
 pub const THROTTLE_NO_NUMBERS_REASON: &str =
     "UCM did not report a row count for this query.";
 
+/// UCM's "Suggested row fetch" is an estimate derived from average row
+/// width and is unreliable in practice — batches at (or just under) the
+/// suggested size routinely re-throttle on wide rows, which is the worst
+/// thing to do to a publisher that is already telling us it's overloaded.
+/// Dividing by 5 is the fixed safety margin the repo owner's production PHP
+/// app has used successfully for years against this API; with it, batches
+/// essentially never re-throttle (adaptive halving remains only as a
+/// backstop). Do NOT "optimize" this back toward the suggested value.
+const THROTTLE_SAFETY_DIVISOR: u64 = 5;
+
 static TOTAL_ROWS_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)total\s+rows\s+matched:\s*(\d+)").unwrap());
 // Cisco's docs render the phrase both as "Suggested row fetch" and
 // "Suggestive Row Fetch" — `suggest\w*` accepts either. Parse leniently.
 static SUGGESTED_FETCH_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)suggest\w*\s+row\s+fetch:\s*less\s+than\s*(\d+)").unwrap());
+static ANY_INT_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d+").unwrap());
 
 /// Turn a SOAP faultstring into the right error: UCM's 8 MB throttle fault
 /// becomes `Throttled` (parsed leniently); everything else stays a verbatim
@@ -92,10 +104,25 @@ fn classify_fault(faultstring: String) -> AxlError {
             .and_then(|c| c.get(1))
             .and_then(|m| m.as_str().parse::<u64>().ok())
     };
-    let info = match (capture(&TOTAL_ROWS_RE), capture(&SUGGESTED_FETCH_RE)) {
-        (Some(total_rows), Some(suggested_fetch)) => {
-            // "less than M" is exclusive -> start at M - 1, clamped to >= 1.
-            let batch_size = suggested_fetch.saturating_sub(1).max(1);
+    // Labeled regexes first (precise). If either misses, fall back to the
+    // first two integers in the faultstring, in order (total, suggested) —
+    // that is how the owner's production PHP app parses this fault, and it
+    // survives any rewording by Cisco.
+    let numbers = match (capture(&TOTAL_ROWS_RE), capture(&SUGGESTED_FETCH_RE)) {
+        (Some(total), Some(suggested)) => Some((total, suggested)),
+        _ => {
+            let mut ints = ANY_INT_RE
+                .find_iter(&faultstring)
+                .filter_map(|m| m.as_str().parse::<u64>().ok());
+            match (ints.next(), ints.next()) {
+                (Some(total), Some(suggested)) => Some((total, suggested)),
+                _ => None,
+            }
+        }
+    };
+    let info = match numbers {
+        Some((total_rows, suggested_fetch)) => {
+            let batch_size = (suggested_fetch / THROTTLE_SAFETY_DIVISOR).max(1);
             ThrottleInfo {
                 total_rows,
                 suggested_fetch,
@@ -105,7 +132,7 @@ fn classify_fault(faultstring: String) -> AxlError {
                 reason: None,
             }
         }
-        _ => ThrottleInfo {
+        None => ThrottleInfo {
             total_rows: 0,
             suggested_fetch: 0,
             batch_size: 0,
@@ -723,11 +750,30 @@ mod tests {
             };
             assert_eq!(info.total_rows, 2816);
             assert_eq!(info.suggested_fetch, 844);
-            assert_eq!(info.batch_size, 843, "exclusive bound: less than 844 -> 843");
-            assert_eq!(info.batches, 4);
+            assert_eq!(info.batch_size, 168, "floor(844 / 5) = 168 (safety margin)");
+            assert_eq!(info.batches, 17, "ceil(2816 / 168) = 17");
             assert!(info.can_paginate);
             assert_eq!(info.reason, None);
         }
+    }
+
+    // A plausibly-reworded faultstring the labeled regexes would miss: the
+    // positional fallback (first two integers, in order) still parses it.
+    #[test]
+    fn throttle_fallback_extracts_first_two_integers_positionally() {
+        let err = classify_fault(
+            "Query request too large. Total matched rows = 2816. Row fetch limit: 844"
+                .to_string(),
+        );
+        let AxlError::Throttled(info) = err else {
+            panic!("expected Throttled");
+        };
+        assert_eq!(info.total_rows, 2816);
+        assert_eq!(info.suggested_fetch, 844);
+        assert_eq!(info.batch_size, 168);
+        assert_eq!(info.batches, 17);
+        assert!(info.can_paginate);
+        assert_eq!(info.reason, None);
     }
 
     #[test]
@@ -742,8 +788,9 @@ mod tests {
 
     #[test]
     fn throttle_batch_size_clamps_to_at_least_one() {
+        // floor(4 / 5) = 0 -> clamped to 1.
         let err = classify_fault(
-            "Query request too large. Total rows matched: 5 rows. Suggested row fetch: less than 1 rows"
+            "Query request too large. Total rows matched: 5 rows. Suggested row fetch: less than 4 rows"
                 .to_string(),
         );
         let AxlError::Throttled(info) = err else {
@@ -1124,7 +1171,8 @@ mod live_mock_tests {
     // ---- 8 MB throttle handling (contract addendum) ----
 
     // Addendum test 1: unpaged `select * from throttle` -> Throttled with
-    // totalRows 2816, suggestedFetch 844, batchSize 843, batches 4.
+    // totalRows 2816, suggestedFetch 844, batchSize floor(844/5) = 168,
+    // batches ceil(2816/168) = 17.
     #[tokio::test]
     async fn mock_throttle_fault_parses_into_throttle_info() {
         let host = mock_or_skip!();
@@ -1134,8 +1182,8 @@ mod live_mock_tests {
         };
         assert_eq!(info.total_rows, 2816);
         assert_eq!(info.suggested_fetch, 844);
-        assert_eq!(info.batch_size, 843);
-        assert_eq!(info.batches, 4);
+        assert_eq!(info.batch_size, 168);
+        assert_eq!(info.batches, 17);
         assert!(info.can_paginate);
         assert_eq!(info.reason, None);
     }
@@ -1150,8 +1198,8 @@ mod live_mock_tests {
         };
         assert_eq!(info.total_rows, 2816);
         assert_eq!(info.suggested_fetch, 844);
-        assert_eq!(info.batch_size, 843);
-        assert_eq!(info.batches, 4);
+        assert_eq!(info.batch_size, 168);
+        assert_eq!(info.batches, 17);
         assert!(info.can_paginate);
     }
 
@@ -1170,7 +1218,7 @@ mod live_mock_tests {
 
     // Addendum test 4 — the core guarantee: a full batched fetch returns
     // exactly 2816 rows, pk-0 through pk-2815, in order, with no duplicates
-    // and no gaps.
+    // and no gaps — now across 17 batches at the /5 safety-margin size.
     #[tokio::test]
     async fn mock_batched_fetch_returns_every_row_in_order() {
         let host = mock_or_skip!();
@@ -1179,7 +1227,7 @@ mod live_mock_tests {
         let r = fetch_batched(
             &target,
             "select * from throttle",
-            843,
+            168,
             Some(2816),
             30,
             |p| progress.push(p),
@@ -1197,17 +1245,17 @@ mod live_mock_tests {
             );
         }
 
-        // 4 batches of 843 + 843 + 843 + 287, with stable total/batch counts.
-        assert_eq!(progress.len(), 4);
+        // 17 batches: 16 x 168 = 2688, then a final 128, with stable counts.
+        assert_eq!(progress.len(), 17);
         assert_eq!(
             progress.iter().map(|p| p.fetched).collect::<Vec<_>>(),
-            vec![843, 1686, 2529, 2816]
+            (1..=17u64).map(|k| (k * 168).min(2816)).collect::<Vec<_>>()
         );
         assert_eq!(
             progress.iter().map(|p| p.batch_index).collect::<Vec<_>>(),
-            vec![1, 2, 3, 4]
+            (1..=17u64).collect::<Vec<_>>()
         );
-        assert!(progress.iter().all(|p| p.batches == 4 && p.total == 2816));
+        assert!(progress.iter().all(|p| p.batches == 17 && p.total == 2816));
     }
 
     // Addendum test 5: an oversized initial batch (900 > 843) throttles,

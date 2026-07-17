@@ -55,13 +55,17 @@ Query request too large. Total rows matched: 2816 rows. Suggested row fetch: les
 ```
 
 SeaQuill surfaced this as a dead end. AXLRows parses the fault and offers a one-click
-**Fetch all 2,816 in 4 batches**, which re-runs the query with Informix
+**Fetch all 2,816 in 17 batches**, which re-runs the query with Informix
 `SELECT SKIP n FIRST m` paging and merges the batches back into the grid. Rows from
 other publishers in the same run are left untouched.
 
-- The batch size comes from UCM's own suggestion. Because that suggestion is an
-  estimate derived from average row width, a batch can still exceed 8 MB -- so the
-  batch size **halves adaptively** and retries until it fits.
+- **The batch size is UCM's suggested row fetch divided by 5.** The suggestion is an
+  estimate derived from average row width and is not reliable: batches sized close to
+  it routinely re-throttle on wide rows, which is the worst thing to do to a publisher
+  that has just told you it's overloaded. The 5x margin is what a decade of production
+  use against this API converged on. Do not "optimize" it back toward the suggestion.
+- As a backstop below that, the batch size also **halves adaptively** if a batch does
+  still throttle. In practice the 5x margin means it never fires.
 - Batching is cancellable, and progress is reported per batch.
 - Queries that can't be rewritten safely (a top-level `UNION`/`INTERSECT`/`MINUS`, or
   one that already has its own `SKIP`/`FIRST`/`LIMIT`) are not paginated. AXLRows says

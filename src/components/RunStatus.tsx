@@ -65,7 +65,7 @@ function TargetChip({ target: t, runActive }: { target: TargetState; runActive: 
             <span className="text-ink">{fmtCount(t.batch.fetched)}</span>
             <span className="text-faint">/ {fmtCount(t.batch.total)}</span>
             <span className="text-faint">
-              · batch {t.batch.batchIndex} of {t.batch.batches}
+              · batch {fmtCount(t.batch.batchIndex)} of {fmtCount(t.batch.batches)}
             </span>
           </span>
         ) : (
@@ -174,7 +174,7 @@ function ThrottleCard({ target: t }: { target: ThrottledTarget }) {
           size="sm"
           onClick={() => void useQueryStore.getState().fetchBatched(t.ucmId)}
         >
-          Fetch all {fmtCount(th.totalRows)} in {th.batches} batch{th.batches === 1 ? "" : "es"}
+          Fetch all {fmtCount(th.totalRows)} in {fmtCount(th.batches)} batch{th.batches === 1 ? "" : "es"}
         </Button>
       )}
     </div>

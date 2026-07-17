@@ -88,7 +88,7 @@ let ucms: MockUcm[] = [
     verifyTls: true,
     hasPassword: true,
     createdAt: "2026-05-14T11:02:00Z",
-    behavior: "throttle", // 8 MB cap: 2816 rows matched, batches of 843
+    behavior: "throttle", // 8 MB cap: 2816 rows matched, batches of 168
     password: "secret",
   },
   {
@@ -176,14 +176,19 @@ function mediumRows(n: number): { columns: string[]; rows: Row[] } {
 }
 
 // The throttling target mirrors the verified mock_axl.py facts: 2816 rows
-// matched, "less than 844" suggested -> batchSize 843 -> 4 batches of
-// 843 + 843 + 843 + 287, pkids pk-0 .. pk-2815.
+// matched, "less than 844" suggested. The batch size applies the same /5 safety
+// margin the backend uses (UCM's suggestion is an unreliable estimate), so:
+// batchSize 168 -> 17 batches of 168 x 16 + 128, pkids pk-0 .. pk-2815.
 const THROTTLE_TOTAL = 2816;
+// Mirrors THROTTLE_SAFETY_DIVISOR in the Rust backend. UCM's suggested row fetch
+// is an estimate from average row width and batches sized to it still get
+// rejected; /5 is the margin the owner's production PHP app has used for years.
+const THROTTLE_SAFETY_DIVISOR = 5;
 const THROTTLE_SUGGESTED = 844;
 const THROTTLE_COLUMNS = ["pkid", "name", "description", "devicepool", "model", "status"];
 
 function throttleInfo(canPaginate: boolean, reason?: string) {
-  const batchSize = THROTTLE_SUGGESTED - 1;
+  const batchSize = Math.max(1, Math.floor(THROTTLE_SUGGESTED / THROTTLE_SAFETY_DIVISOR));
   return {
     totalRows: THROTTLE_TOTAL,
     suggestedFetch: THROTTLE_SUGGESTED,
