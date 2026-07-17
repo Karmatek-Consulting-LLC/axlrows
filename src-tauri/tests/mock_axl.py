@@ -262,13 +262,19 @@ class Handler(BaseHTTPRequestHandler):
 def make_cert():
     d = Path(tempfile.mkdtemp(prefix="mockaxl-"))
     cert, key = d / "cert.pem", d / "key.pem"
-    subprocess.run(
-        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
-         "-keyout", str(key), "-out", str(cert), "-days", "2",
-         "-subj", "/CN=localhost",
-         "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
-        check=True, capture_output=True,
-    )
+    base = ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
+            "-keyout", str(key), "-out", str(cert), "-days", "2",
+            "-subj", "/CN=localhost"]
+    # -addext arrived in OpenSSL 1.1.1; macOS ships LibreSSL, which may not have
+    # it. The SAN is cosmetic here (every caller uses verifyTls=false, so the
+    # cert is never validated), so fall back to a plain cert rather than fail.
+    try:
+        subprocess.run(
+            base + ["-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"],
+            check=True, capture_output=True,
+        )
+    except subprocess.CalledProcessError:
+        subprocess.run(base, check=True, capture_output=True)
     return cert, key
 
 

@@ -115,7 +115,36 @@ npm run tauri dev      # development
 npm run tauri build    # release + installers for the host platform
 ```
 
-Linux build dependencies:
+### macOS
+
+```bash
+xcode-select --install                                              # linker + python3
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh      # Rust
+brew install node                                                   # or nvm install 22
+npm install && npm run tauri build
+```
+
+Output lands in `src-tauri/target/release/bundle/macos/AXLRows.app` and
+`.../bundle/dmg/`. The build targets the host architecture; for a universal binary:
+
+```bash
+rustup target add x86_64-apple-darwin aarch64-apple-darwin
+npm run tauri build -- --target universal-apple-darwin
+```
+
+On first run macOS asks whether AXLRows may read its Keychain entries — choose
+**Always Allow**. A locally built app is only ad-hoc signed, and that signature
+changes on every rebuild, so macOS will ask again after each `tauri build`. That's
+expected, not a bug. Distributing the `.dmg` to another Mac would need a Developer ID
+signature and notarization; running your own build needs neither.
+
+### Windows
+
+Install the [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+and [Rust](https://rustup.rs), then `npm install && npm run tauri build`. Produces an
+`.msi` and an `.exe` installer under `src-tauri/target/release/bundle/`.
+
+### Linux build dependencies:
 
 ```bash
 sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
