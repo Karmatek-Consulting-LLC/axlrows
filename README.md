@@ -1,6 +1,8 @@
 <p align="center">
   <b>AXLRows</b><br>
-  <i>The Cisco UCM SQL client you've always wanted.</i>
+  <i>The Cisco UCM SQL client you've always wanted.</i><br><br>
+  <a href="https://karmatek-consulting-llc.github.io/axlrows/">User Guide</a> ·
+  <a href="https://github.com/Karmatek-Consulting-LLC/axlrows/releases/latest">Download</a>
 </p>
 
 <picture>
