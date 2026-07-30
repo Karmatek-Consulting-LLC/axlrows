@@ -1,6 +1,6 @@
 <p align="center">
   <b>AXLRows</b><br>
-  <i>Send SQL to Cisco UCM over AXL. Work with the results like a grown-up.</i>
+  <i>The Cisco UCM SQL client you always wanted.</i>
 </p>
 
 ---
