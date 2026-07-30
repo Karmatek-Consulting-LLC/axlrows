@@ -1,6 +1,6 @@
 <p align="center">
   <b>AXLRows</b><br>
-  <i>The Cisco UCM SQL client you always wanted.</i>
+  <i>The Cisco UCM SQL client you've always wanted.</i>
 </p>
 
 ---
