@@ -93,7 +93,12 @@ Turn it on for production publishers.
 
 ## Install
 
-Grab a bundle from `src-tauri/target/release/bundle/` after building, or:
+**Windows:** download the `.msi` or `-setup.exe` installer from
+[Releases](https://github.com/Karmatek-Consulting-LLC/axlrows/releases).
+Release installers are code-signed, courtesy of
+[SignPath Foundation](https://signpath.org) — see [docs/SIGNING.md](docs/SIGNING.md).
+
+Otherwise, grab a bundle from `src-tauri/target/release/bundle/` after building, or:
 
 ```bash
 sudo dpkg -i AXLRows_0.1.0_amd64.deb     # Debian/Ubuntu
