@@ -34,6 +34,16 @@ test shows the AXL version and round-trip latency:
 
 ![Servers view with a passing connection test](screenshots/servers.png)
 
+Then click **Fetch schema**: AXLRows reads the server's Informix system
+catalog (every table and column name, straight from the database — no
+data dictionary needed) and uses it to power SQL autocomplete in the
+editor. On a UCM 14 publisher that's ~800 tables and ~6,000 columns,
+fetched in a couple of seconds and cached locally. Re-run it after a UCM
+upgrade to pick up schema changes; with multiple servers, suggestions
+are the union of every fetched schema.
+
+![Schema fetched: 808 tables, 5,931 columns](screenshots/fetch-schema.png)
+
 Two things worth knowing:
 
 - **Your password never touches disk.** It's stored in the OS keychain
@@ -50,8 +60,12 @@ Back in the **Query** view (`Ctrl/Cmd+1`):
 1. **Pick your targets.** Click the server chips in the TARGETS row to
    select which publishers receive the query. The Run button stays
    disabled until at least one target is selected.
-2. **Write SQL** in the editor, with syntax highlighting and SQL keyword
-   autocompletion.
+2. **Write SQL** in the editor, with syntax highlighting and
+   autocompletion. After a [schema fetch](#add-your-first-ucm-server),
+   completions include the real table and column names from your UCM —
+   type a partial name after `FROM`, or `tablename.` for its columns:
+
+   ![Autocomplete suggesting UCM table names](screenshots/sql-autocomplete.png)
 3. **Run** with the button or `Ctrl/Cmd+Enter`.
 
 Each target reports its own status chip — row count and latency on

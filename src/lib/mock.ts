@@ -105,6 +105,18 @@ let ucms: MockUcm[] = [
   },
 ];
 
+// Schema cache: null until "fetched", mirroring the real backend.
+let mockSchema: Record<string, string[]> | null = null;
+
+const MOCK_SCHEMA_TABLES: Record<string, string[]> = {
+  device: ["pkid", "name", "description", "tkclass", "tkmodel", "fkdevicepool"],
+  devicepool: ["pkid", "name", "fkcallmanagergroup"],
+  enduser: ["pkid", "userid", "firstname", "lastname", "department"],
+  endusernumplanmap: ["pkid", "fkenduser", "fknumplan"],
+  numplan: ["pkid", "dnorpattern", "description", "tkpatternusage"],
+  typemodel: ["enum", "name", "moniker"],
+};
+
 let favorites: Favorite[] = [
   {
     id: "f-1",
@@ -404,6 +416,35 @@ export const mockClient: IpcClient = {
       };
     }
     return { ok: true, message: `AXL ${u.version} responded`, elapsedMs: Math.round(ms) };
+  },
+
+  async fetchSchema(id) {
+    const u = ucms.find((x) => x.id === id);
+    if (!u) throw `No UCM with id ${id}`;
+    const ms = rand(400, 1600);
+    await sleep(ms);
+    mockSchema = MOCK_SCHEMA_TABLES;
+    const columnCount = Object.values(mockSchema).reduce((n, c) => n + c.length, 0);
+    return {
+      tables: mockSchema,
+      fetchedAt: nowIso(),
+      tableCount: Object.keys(mockSchema).length,
+      columnCount,
+      elapsedMs: Math.round(ms),
+    };
+  },
+
+  async getSchema() {
+    await sleep(rand(20, 60));
+    if (!mockSchema) return null;
+    const columnCount = Object.values(mockSchema).reduce((n, c) => n + c.length, 0);
+    return {
+      tables: mockSchema,
+      fetchedAt: nowIso(),
+      tableCount: Object.keys(mockSchema).length,
+      columnCount,
+      elapsedMs: 0,
+    };
   },
 
   async listFavorites() {

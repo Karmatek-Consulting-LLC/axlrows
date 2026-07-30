@@ -5,6 +5,7 @@ import { Prec } from "@codemirror/state";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags as t } from "@lezer/highlight";
 import { forwardRef, useMemo } from "react";
+import { useSchemaStore } from "../stores/schema";
 import { useUiStore } from "../stores/ui";
 
 /** Editor chrome reads the app's CSS variables so both themes stay in sync. */
@@ -67,6 +68,7 @@ export const SqlEditor = forwardRef<
   }
 >(({ value, onChange, onRun }, ref) => {
   const dark = useUiStore((s) => s.theme === "dark");
+  const schemaTables = useSchemaStore((s) => s.tables);
 
   const extensions = useMemo(
     () => [
@@ -82,12 +84,14 @@ export const SqlEditor = forwardRef<
           },
         ]),
       ),
-      sql(),
+      // With an introspected schema, lang-sql completes table names, and
+      // column names after `table.` or inside a query FROM that table.
+      sql(schemaTables ? { schema: schemaTables } : {}),
       chrome,
       highlight(dark),
       EditorView.lineWrapping,
     ],
-    [dark, onRun],
+    [dark, onRun, schemaTables],
   );
 
   return (

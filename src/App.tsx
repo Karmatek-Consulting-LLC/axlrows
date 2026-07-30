@@ -8,6 +8,7 @@ import { Tip, TooltipProvider } from "./components/ui/Tooltip";
 import { ipc, USING_MOCK, type UnlistenFn } from "./lib/ipc";
 import { cn } from "./lib/utils";
 import { useFavoritesStore } from "./stores/favorites";
+import { useSchemaStore } from "./stores/schema";
 import { useQueryStore } from "./stores/query";
 import { useUcmsStore } from "./stores/ucms";
 import { useUiStore, type View } from "./stores/ui";
@@ -32,6 +33,7 @@ export default function App() {
   useEffect(() => {
     void useUcmsStore.getState().load();
     void useFavoritesStore.getState().load();
+    void useSchemaStore.getState().load();
   }, []);
 
   // Query event stream -> store. Wired exactly once per mount.

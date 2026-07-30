@@ -177,7 +177,7 @@ enum TargetFail {
 }
 
 /// Fetch the keychain password without blocking the async runtime.
-async fn fetch_password(ucm_id: String) -> Result<String, String> {
+pub(crate) async fn fetch_password(ucm_id: String) -> Result<String, String> {
     let result = tokio::task::spawn_blocking(move || creds::get_password(&ucm_id))
         .await
         .map_err(|e| format!("Internal error: {e}"))?;
@@ -188,7 +188,7 @@ async fn fetch_password(ucm_id: String) -> Result<String, String> {
     }
 }
 
-fn axl_target(ucm: &Ucm, password: String) -> axl::AxlTarget {
+pub(crate) fn axl_target(ucm: &Ucm, password: String) -> axl::AxlTarget {
     axl::AxlTarget {
         host: ucm.host.clone(),
         username: ucm.username.clone(),

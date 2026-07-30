@@ -7,6 +7,7 @@ import type {
   Favorite,
   QueryCompletePayload,
   Row,
+  SchemaInfo,
   TargetBatchProgressPayload,
   TargetErrorPayload,
   TargetStartedPayload,
@@ -26,6 +27,10 @@ export interface IpcClient {
   updateUcm(id: string, input: UcmInput): Promise<Ucm>;
   deleteUcm(id: string): Promise<void>;
   testUcm(id: string): Promise<TestUcmResult>;
+  /** Introspect one UCM's Informix catalog and cache the result. */
+  fetchSchema(id: string): Promise<SchemaInfo>;
+  /** Union of every cached server schema; null before any fetch. */
+  getSchema(): Promise<SchemaInfo | null>;
 
   listFavorites(): Promise<Favorite[]>;
   createFavorite(name: string, sql: string): Promise<Favorite>;
@@ -58,6 +63,8 @@ const tauriClient: IpcClient = {
   updateUcm: (id, input) => invoke<Ucm>("update_ucm", { id, input }),
   deleteUcm: (id) => invoke<void>("delete_ucm", { id }),
   testUcm: (id) => invoke<TestUcmResult>("test_ucm", { id }),
+  fetchSchema: (id) => invoke<SchemaInfo>("fetch_schema", { id }),
+  getSchema: () => invoke<SchemaInfo | null>("get_schema"),
 
   listFavorites: () => invoke<Favorite[]>("list_favorites"),
   createFavorite: (name, sql) => invoke<Favorite>("create_favorite", { name, sql }),

@@ -120,6 +120,15 @@ pub struct Favorite {
     pub updated_at: String,
 }
 
+/// One cached schema introspection, as fetched from one UCM. `data` is the
+/// JSON `{tabname: [colname, ...]}` map produced by `schema::fetch_schema`.
+#[derive(Debug, Clone)]
+pub struct StoredSchema {
+    pub ucm_id: String,
+    pub fetched_at: String,
+    pub data: String,
+}
+
 pub struct Db(Mutex<Connection>);
 
 impl Db {
@@ -209,13 +218,47 @@ impl Db {
     }
 
     pub fn delete_ucm(&self, id: &str) -> Result<(), AppError> {
-        let n = self
-            .conn()
-            .execute("DELETE FROM ucms WHERE id = ?1", params![id])?;
+        let conn = self.conn();
+        let n = conn.execute("DELETE FROM ucms WHERE id = ?1", params![id])?;
         if n == 0 {
             return Err(AppError::NotFound(format!("UCM not found: {id}")));
         }
+        conn.execute("DELETE FROM schemas WHERE ucm_id = ?1", params![id])?;
         Ok(())
+    }
+
+    // ---- schemas ----
+
+    pub fn upsert_schema(
+        &self,
+        ucm_id: &str,
+        fetched_at: &str,
+        data: &str,
+    ) -> Result<(), AppError> {
+        self.conn().execute(
+            "INSERT INTO schemas (ucm_id, fetched_at, data) VALUES (?1, ?2, ?3)
+             ON CONFLICT(ucm_id) DO UPDATE SET fetched_at = ?2, data = ?3",
+            params![ucm_id, fetched_at, data],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_schemas(&self) -> Result<Vec<StoredSchema>, AppError> {
+        let conn = self.conn();
+        let mut stmt =
+            conn.prepare("SELECT ucm_id, fetched_at, data FROM schemas ORDER BY ucm_id")?;
+        let rows = stmt.query_map([], |row| {
+            Ok(StoredSchema {
+                ucm_id: row.get(0)?,
+                fetched_at: row.get(1)?,
+                data: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
     }
 
     // ---- favorites ----
@@ -305,6 +348,18 @@ fn migrate(conn: &Connection) -> Result<(), rusqlite::Error> {
                  updated_at TEXT NOT NULL
              );
              PRAGMA user_version = 1;
+             COMMIT;",
+        )?;
+    }
+    if version < 2 {
+        conn.execute_batch(
+            "BEGIN;
+             CREATE TABLE IF NOT EXISTS schemas (
+                 ucm_id     TEXT PRIMARY KEY,
+                 fetched_at TEXT NOT NULL,
+                 data       TEXT NOT NULL
+             );
+             PRAGMA user_version = 2;
              COMMIT;",
         )?;
     }
@@ -405,6 +460,34 @@ mod tests {
         assert_eq!(got.updated_at, "2026-01-02T00:00:00+00:00");
         db.delete_favorite("f1").unwrap();
         assert!(db.list_favorites().unwrap().is_empty());
+    }
+
+    #[test]
+    fn schema_upsert_and_cascade_on_ucm_delete() {
+        let db = Db::open_in_memory().unwrap();
+        let ucm = Ucm {
+            id: "u1".into(),
+            name: "Lab".into(),
+            host: "10.0.0.1".into(),
+            username: "axluser".into(),
+            version: AxlVersion::V14_0,
+            verify_tls: false,
+            has_password: false,
+            created_at: "2026-01-01T00:00:00+00:00".into(),
+        };
+        db.insert_ucm(&ucm).unwrap();
+
+        db.upsert_schema("u1", "2026-01-02T00:00:00+00:00", r#"{"device":["pkid"]}"#)
+            .unwrap();
+        db.upsert_schema("u1", "2026-01-03T00:00:00+00:00", r#"{"device":["pkid","name"]}"#)
+            .unwrap();
+        let schemas = db.list_schemas().unwrap();
+        assert_eq!(schemas.len(), 1);
+        assert_eq!(schemas[0].fetched_at, "2026-01-03T00:00:00+00:00");
+        assert!(schemas[0].data.contains("name"));
+
+        db.delete_ucm("u1").unwrap();
+        assert!(db.list_schemas().unwrap().is_empty());
     }
 
     #[test]

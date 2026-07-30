@@ -58,6 +58,17 @@ export interface TestUcmResult {
   elapsedMs: number;
 }
 
+// Introspected UCM schema: table name -> column names in DDL order.
+export type SchemaMap = Record<string, string[]>;
+
+export interface SchemaInfo {
+  tables: SchemaMap;
+  fetchedAt: string; // RFC3339
+  tableCount: number;
+  columnCount: number;
+  elapsedMs: number; // 0 when served from cache
+}
+
 // ---- Event payloads (CONTRACT.md `query://*` events) ----
 
 export interface TargetStartedPayload {
