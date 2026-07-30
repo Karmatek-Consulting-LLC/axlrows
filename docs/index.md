@@ -1,3 +1,5 @@
+<p align="center"><img src="logo.svg" width="110" alt="AXLRows logo"></p>
+
 # AXLRows User Guide
 
 *The Cisco UCM SQL client you've always wanted.*

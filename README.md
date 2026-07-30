@@ -1,4 +1,5 @@
 <p align="center">
+  <img src="docs/logo.svg" width="120" alt="AXLRows logo"><br><br>
   <b>AXLRows</b><br>
   <i>The Cisco UCM SQL client you've always wanted.</i><br><br>
   <a href="https://karmatek-consulting-llc.github.io/axlrows/">User Guide</a> ·
@@ -211,8 +212,6 @@ and `query://complete` events as each server responds.
 ## Credits
 
 - Original SeaQuill by [Marty Sloan](https://github.com/sloan58).
-- Bob Sloan for the original SeaQuill logo.
-
 ## License
 
 MIT -- see [LICENSE.md](LICENSE.md).
