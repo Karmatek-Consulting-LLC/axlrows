@@ -56,9 +56,7 @@ export function ServersView() {
       <header className="flex shrink-0 items-center justify-between border-b border-line bg-surface px-4 py-3">
         <div>
           <h1 className="text-[15px] font-semibold tracking-tight">UCM servers</h1>
-          <p className="mt-0.5 text-xs text-mut">
-            Publishers you query over AXL. Passwords live in the OS keychain — never on disk.
-          </p>
+          <p className="mt-0.5 text-xs text-mut">Publishers you query over AXL.</p>
         </div>
         <Button variant="primary" onClick={openAdd}>
           <Plus className="size-3.5" />
