@@ -3,6 +3,11 @@
   <i>The Cisco UCM SQL client you've always wanted.</i>
 </p>
 
+<picture>
+  <source media="(prefers-color-scheme: light)" srcset="docs/screenshots/query-results-light.png">
+  <img src="docs/screenshots/query-results-dark.png" alt="AXLRows querying a Cisco UCM publisher: SQL editor on top, per-target status chip (227 rows in 708 ms), and the results grid below">
+</picture>
+
 ---
 
 AXLRows is a desktop app for network engineers who query the Cisco Unified CM
@@ -44,6 +49,15 @@ Constructing it directly in Rust deleted the entire schema tree.
 - **Keyboard-first** -- `Ctrl/Cmd+Enter` runs, `Ctrl/Cmd+K` opens the command palette,
   `Ctrl/Cmd+1/2/3` switches views.
 - **Light and dark themes**, persisted.
+
+## Screenshots
+
+All taken against a live UCM 14 lab publisher.
+
+| | |
+|---|---|
+| ![Command palette](docs/screenshots/command-palette.png) *Command palette (`Cmd/Ctrl+K`)* | ![Servers view](docs/screenshots/servers.png) *Servers — connection test with latency* |
+| ![Bookmark dialog](docs/screenshots/bookmark-dialog.png) *Saving a query to Favorites* | ![Per-target error status](docs/screenshots/error-status.png) *SQL errors surface per target, with the Informix message* |
 
 ## Large result sets
 
