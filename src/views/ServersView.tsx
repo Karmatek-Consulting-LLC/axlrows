@@ -207,23 +207,30 @@ function ServerCard({ ucm, onEdit }: { ucm: Ucm; onEdit: () => void }) {
         )}
       </div>
 
-      <div className="mt-3 flex items-center gap-2 border-t border-line/70 pt-2.5">
-        <Button size="sm" onClick={() => void runTest()} disabled={testing}>
-          {testing ? <Spinner className="size-3 text-accent" /> : <Activity className="size-3.5" />}
-          Test connection
-        </Button>
-        <Tip content="Read this server's table and column names to power SQL autocomplete.">
-          <Button size="sm" onClick={() => void runSchemaFetch()} disabled={fetchingSchema}>
-            {fetchingSchema ? (
+      <div className="mt-3 space-y-2 border-t border-line/70 pt-2.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => void runTest()} disabled={testing}>
+            {testing ? (
               <Spinner className="size-3 text-accent" />
             ) : (
-              <DatabaseZap className="size-3.5" />
+              <Activity className="size-3.5" />
             )}
-            Fetch schema
+            Test connection
           </Button>
-        </Tip>
+          <Tip content="Read this server's table and column names to power SQL autocomplete.">
+            <Button size="sm" onClick={() => void runSchemaFetch()} disabled={fetchingSchema}>
+              {fetchingSchema ? (
+                <Spinner className="size-3 text-accent" />
+              ) : (
+                <DatabaseZap className="size-3.5" />
+              )}
+              Fetch schema
+            </Button>
+          </Tip>
+        </div>
+        {/* Own row: the message would otherwise be crushed by the buttons. */}
         {test && (
-          <span
+          <div
             className={cn(
               "flex min-w-0 items-center gap-1 text-[11px]",
               test.ok ? "text-ok" : "text-err",
@@ -238,7 +245,7 @@ function ServerCard({ ucm, onEdit }: { ucm: Ucm; onEdit: () => void }) {
               {test.message}
             </span>
             <span className="shrink-0 text-faint">· {fmtMs(test.elapsedMs)}</span>
-          </span>
+          </div>
         )}
       </div>
 
