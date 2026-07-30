@@ -7,6 +7,7 @@ mod db;
 mod error;
 mod export;
 mod query;
+mod schema;
 
 use std::sync::Arc;
 
@@ -181,6 +182,8 @@ pub fn run() {
             query::run_query,
             query::cancel_query,
             query::fetch_target_batched,
+            schema::fetch_schema,
+            schema::get_schema,
             export::export_csv,
         ])
         .run(tauri::generate_context!())

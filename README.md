@@ -33,6 +33,9 @@ It is a ground-up rewrite of [SeaQuill](https://github.com/sloan58/seaquill)
 - **Favorites** -- name, save, edit, and re-run queries.
 - **Servers** -- add/edit/delete UCM publishers, per-server TLS verification toggle,
   and a connection test that reports latency.
+- **Schema-aware autocomplete** -- one click introspects the server's Informix
+  catalog (~800 tables on UCM 14) and the editor completes real table and
+  column names.
 - **Keyboard-first** -- `Ctrl/Cmd+Enter` runs, `Ctrl/Cmd+K` opens the command palette,
   `Ctrl/Cmd+1/2/3` switches views.
 - **Light and dark themes**, persisted.

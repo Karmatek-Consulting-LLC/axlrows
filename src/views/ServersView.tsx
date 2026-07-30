@@ -2,6 +2,7 @@ import {
   Activity,
   CircleCheck,
   CircleX,
+  DatabaseZap,
   Info,
   KeyRound,
   Pencil,
@@ -32,6 +33,7 @@ import {
   type UcmInput,
 } from "../lib/types";
 import { cn, errMsg, fmtMs, ucmHue } from "../lib/utils";
+import { useSchemaStore } from "../stores/schema";
 import { useUcmsStore } from "../stores/ucms";
 
 export function ServersView() {
@@ -96,10 +98,23 @@ export function ServersView() {
 
 function ServerCard({ ucm, onEdit }: { ucm: Ucm; onEdit: () => void }) {
   const remove = useUcmsStore((s) => s.remove);
+  const refreshSchema = useSchemaStore((s) => s.refresh);
+  const fetchingSchema = useSchemaStore((s) => s.fetching === ucm.id);
   const [testing, setTesting] = useState(false);
   const [test, setTest] = useState<TestUcmResult | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const hue = ucmHue(ucm.id);
+
+  async function runSchemaFetch() {
+    try {
+      const info = await refreshSchema(ucm.id);
+      toast.success(`Schema fetched from ${ucm.name}`, {
+        description: `${info.tableCount.toLocaleString()} tables, ${info.columnCount.toLocaleString()} columns in ${fmtMs(info.elapsedMs)} — SQL autocomplete is live.`,
+      });
+    } catch (e) {
+      toast.error("Schema fetch failed", { description: errMsg(e) });
+    }
+  }
 
   async function runTest() {
     setTesting(true);
@@ -197,6 +212,16 @@ function ServerCard({ ucm, onEdit }: { ucm: Ucm; onEdit: () => void }) {
           {testing ? <Spinner className="size-3 text-accent" /> : <Activity className="size-3.5" />}
           Test connection
         </Button>
+        <Tip content="Read this server's table and column names to power SQL autocomplete.">
+          <Button size="sm" onClick={() => void runSchemaFetch()} disabled={fetchingSchema}>
+            {fetchingSchema ? (
+              <Spinner className="size-3 text-accent" />
+            ) : (
+              <DatabaseZap className="size-3.5" />
+            )}
+            Fetch schema
+          </Button>
+        </Tip>
         {test && (
           <span
             className={cn(
