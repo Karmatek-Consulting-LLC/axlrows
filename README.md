@@ -21,22 +21,6 @@ exportable grid.
 It is a ground-up rewrite of [SeaQuill](https://github.com/sloan58/seaquill)
 (Electron + React 16 + Bootstrap) on **Tauri v2 + React 19 + TypeScript**.
 
-## Why the rewrite
-
-| | SeaQuill (Electron) | AXLRows (Tauri) |
-|---|---|---|
-| Installer size | ~200 MB | **~7 MB** (`.deb` / `.rpm`), 79 MB AppImage |
-| AXL client | `strong-soap` + 40 bundled WSDL/XSD files (~30 MB) | hand-built SOAP envelope in Rust, **zero schema files** |
-| Passwords | plaintext JSON on disk | **OS keychain** (Keychain / Credential Manager / libsecret) |
-| Result set | paginated Bootstrap table | **virtualized grid**, 20k rows rendered in ~107 ms |
-| Query timeout | 5s, hardcoded | 60s, configurable |
-| Per-target progress | one global spinner | live per-server status, row counts, latency |
-
-The 30 MB of AXL schemas existed only because `strong-soap` needed a WSDL to
-build a client. `executeSQLQuery` is a single SOAP envelope whose only
-version-dependent part is the namespace -- `http://www.cisco.com/AXL/API/{version}`.
-Constructing it directly in Rust deleted the entire schema tree.
-
 ## Features
 
 - **Multi-target queries** -- one SQL statement, N publishers, executed concurrently.
@@ -71,7 +55,7 @@ rejects anything larger with a SOAP fault:
 Query request too large. Total rows matched: 2816 rows. Suggested row fetch: less than 844 rows
 ```
 
-SeaQuill surfaced this as a dead end. AXLRows parses the fault and offers a one-click
+AXLRows parses the fault and offers a one-click
 **Fetch all 2,816 in 17 batches**, which re-runs the query with Informix
 `SELECT SKIP n FIRST m` paging and merges the batches back into the grid. Rows from
 other publishers in the same run are left untouched.
@@ -104,9 +88,8 @@ frontend. They live in the OS keychain, keyed by `io.karmatek.axlrows` +
 the server's UUID. The SQLite database holds only non-secret metadata.
 
 `Verify TLS certificate` is **off by default**, matching typical lab UCM
-deployments with self-signed certs -- but unlike the old app, which silently
-disabled verification for every request, it is per-server and visible in the UI.
-Turn it on for production publishers.
+deployments with self-signed certs. The toggle is per-server and visible in
+the UI -- turn it on for production publishers.
 
 ## Install
 
