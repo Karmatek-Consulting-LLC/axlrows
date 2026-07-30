@@ -1,6 +1,6 @@
 [package]
 name = "axlrows"
-version = "0.1.2"
+version = "0.1.3"
 description = "Send SQL queries to Cisco UCM servers via the AXL SOAP API"
 authors = ["Marty"]
 edition = "2021"
