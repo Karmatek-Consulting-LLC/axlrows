@@ -39,25 +39,19 @@ The cert subject — what UAC shows as publisher — comes from the identity
 validation, not the profile name: `CN="Karma-Tek Consulting, LLC", L=Cary,
 S=North Carolina, C=US`.
 
-### One-time setup for this repo (Azure side)
+### One-time setup for this repo (Azure side) — done 2026-08-05
 
-Three additions, portal or `az` CLI (commands are approximate — the
-`trustedsigning` extension has renamed things before; the portal always works):
+1. **Certificate profile: shared with rxrelay-agent.** A separate `axlrows`
+   profile was attempted but the **Basic SKU allows only one certificate
+   profile** (`ValidationError: Cert Profile creation failed due to the
+   SKU - Basic limitation`), and Premium (~10× the cost) or a second account
+   (fresh identity validation) isn't worth it. Both products therefore sign
+   with the `rxrelay-agent` profile — cosmetic only: the cert subject
+   (what users see) is the company name either way. Revocation is coupled
+   across both products; revisit if that ever matters.
 
-1. **Certificate profile** `axlrows` under `karmatek-signing` (Public Trust,
-   reusing the existing identity validation). A separate profile per product
-   keeps revocation independent; reusing the `rxrelay-agent` profile would
-   also work since the cert subject is identical.
-
-   ```bash
-   az trustedsigning certificate-profile create \
-     -g rxrelay-signing --account-name karmatek-signing \
-     -n axlrows --profile-type PublicTrust \
-     --identity-validation-id acbc2971-631e-43d7-8071-dce351d74d96
-   ```
-
-2. **Federated credential** for this repo on the existing CI signer app
-   (GitHub OIDC — one app can sign for many repos; each credential is
+2. **Federated credential** `axlrows-release` added to the existing CI signer
+   app (GitHub OIDC — one app signs for many repos; each credential is
    repo+environment scoped):
 
    ```bash
@@ -70,33 +64,30 @@ Three additions, portal or `az` CLI (commands are approximate — the
      }'
    ```
 
-3. **Role** "Artifact Signing Certificate Profile Signer" (Azure's new name
-   for "Trusted Signing Certificate Profile Signer") for that app on the new
-   `axlrows` profile — skip if the existing grant was made at account scope
-   rather than on the `rxrelay-agent` profile.
+3. **Role**: none needed — the app's "Artifact Signing Certificate Profile
+   Signer" assignment is at **account scope** (`karmatek-signing`), which
+   covers every profile.
 
-### One-time setup for this repo (GitHub side)
+### One-time setup for this repo (GitHub side) — done 2026-08-05
 
-1. Create a **`release` environment** (Settings → Environments) and restrict
-   it to `v*` tags under "Deployment branches and tags" — the OIDC subject in
-   step 2 above only matches jobs running in this environment, so nothing
-   outside it can sign.
+1. **`release` environment** created, restricted to `v*` tags under
+   "Deployment branches and tags" — the OIDC subject in step 2 above only
+   matches jobs running in this environment, so nothing outside it can sign.
 
-2. Set **repository variables** (Settings → Secrets and variables → Actions →
-   Variables). These are identifiers, not secrets — OIDC handles auth:
+2. **Repository variables** set (identifiers, not secrets — OIDC handles
+   auth):
 
    | Variable | Value |
    |---|---|
    | `AZURE_CLIENT_ID` | `fe067dd0-a4c2-4e01-bd32-25d9c010d794` |
-   | `AZURE_TENANT_ID` | same as the rxrelay-agent repo variable |
+   | `AZURE_TENANT_ID` | `5e0411c6-6b3e-41c7-b69d-3c24adbe97d3` |
    | `AZURE_SUBSCRIPTION_ID` | `722b946e-dc51-40a3-bc19-36fcd8c9b801` |
    | `SIGNING_ENDPOINT` | `https://eus.codesigning.azure.net` |
    | `SIGNING_ACCOUNT_NAME` | `karmatek-signing` |
-   | `SIGNING_CERT_PROFILE` | `axlrows` |
+   | `SIGNING_CERT_PROFILE` | `rxrelay-agent` (shared — see above) |
 
-   (These five are identical across Karmatek repos except the profile —
-   org-level variables would remove the duplication if a third signed repo
-   ever appears.)
+   (Identical across Karmatek repos — org-level variables would remove the
+   duplication if a third signed repo ever appears.)
 
 `AZURE_CLIENT_ID` doubles as the signing gate: while unset, releases build
 UNSIGNED with a warning — fine for internal testing, never for distribution.
@@ -179,11 +170,13 @@ developer.apple.com.
 
 - [x] Azure: subscription, Trusted Signing account, identity validation
       (all reused from rxrelay-agent, provisioned 2026-07-23)
-- [ ] Azure: certificate profile `axlrows` created
-- [ ] Azure: federated credential for `repo:Karmatek-Consulting-LLC/axlrows:environment:release`
-- [ ] Azure: signer role granted on the `axlrows` profile
-- [ ] GitHub: `release` environment created, restricted to `v*` tags
-- [ ] GitHub: the six `AZURE_*`/`SIGNING_*` repository variables set
+- [x] Azure: certificate profile — **shared `rxrelay-agent` profile** (Basic
+      SKU allows only one; see above), 2026-08-05
+- [x] Azure: federated credential for
+      `repo:Karmatek-Consulting-LLC/axlrows:environment:release`, 2026-08-05
+- [x] Azure: signer role — already granted at account scope, covers all profiles
+- [x] GitHub: `release` environment created, restricted to `v*` tags, 2026-08-05
+- [x] GitHub: the six `AZURE_*`/`SIGNING_*` repository variables set, 2026-08-05
 - [ ] Apple: Developer Program enrollment (identity verification can take a
       day or two — start early)
 - [ ] Apple: Developer ID Application cert created + exported
