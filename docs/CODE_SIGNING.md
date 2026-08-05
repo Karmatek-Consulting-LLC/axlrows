@@ -145,8 +145,15 @@ developer.apple.com.
 - [x] Azure: certificate profile `axlrows` created, cert Active, 2026-08-05
 - [x] GitHub: `AZURE_CLIENT_ID` variable set — **Windows signing is live**,
       2026-08-05
-- [ ] Apple: Developer Program enrollment (identity verification can take a
-      day or two — start early)
-- [ ] Apple: Developer ID Application cert created + exported
-- [ ] GitHub: the six `APPLE_*` secrets set
-- [ ] Test release: tag `v0.1.0`, verify both platforms per the section above
+- [x] Apple: enrolled (currently **individual** membership — the publisher
+      string on macOS is the personal name until the pending conversion to a
+      Karma-Tek Consulting, LLC organization account completes; after
+      conversion, issue a fresh Developer ID Application cert and update the
+      `APPLE_CERTIFICATE`/`APPLE_CERTIFICATE_PASSWORD`/`APPLE_SIGNING_IDENTITY`
+      secrets — nothing else changes)
+- [x] Apple: Developer ID Application cert issued (G2, expires 2031),
+      2026-08-05
+- [x] GitHub: the six `APPLE_*` secrets set, 2026-08-05
+- [x] Test release: `v0.1.4` (Windows signing) and `v0.1.5` (both platforms)
+      verified per the section above — Windows via osslsigncode, macOS app
+      accepted as Notarized Developer ID with stapled ticket, 2026-08-05
