@@ -98,8 +98,8 @@ the UI -- turn it on for production publishers.
 
 **Windows:** download the `.msi` or `-setup.exe` installer from
 [Releases](https://github.com/Karmatek-Consulting-LLC/axlrows/releases).
-Release installers are code-signed, courtesy of
-[SignPath Foundation](https://signpath.org) — see [docs/SIGNING.md](docs/SIGNING.md).
+Release installers are code-signed (Azure Trusted Signing on Windows, Apple
+Developer ID + notarization on macOS) — see [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
 
 Otherwise, grab a bundle from `src-tauri/target/release/bundle/` after building, or:
 
