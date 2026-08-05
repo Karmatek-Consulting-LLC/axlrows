@@ -16,7 +16,17 @@ filterable, exportable grid.
 [latest release](https://github.com/Karmatek-Consulting-LLC/axlrows/releases/latest)
 and run it.
 
-**macOS / Linux:** build from source for now — see the
+**macOS:** download `AXLRows_<version>_universal.dmg` from the
+[latest release](https://github.com/Karmatek-Consulting-LLC/axlrows/releases/latest),
+open it, and drag AXLRows to Applications. The app is signed and notarized,
+and the universal build runs natively on Apple silicon and Intel.
+
+**Linux:** download the `.deb`, `.rpm`, or `.AppImage` from the
+[latest release](https://github.com/Karmatek-Consulting-LLC/axlrows/releases/latest).
+A Secret Service provider (`gnome-keyring`, KWallet, etc.) is required for
+password storage.
+
+Prefer building yourself? See the
 [README](https://github.com/Karmatek-Consulting-LLC/axlrows#build-from-source).
 
 ## Add your first UCM server
