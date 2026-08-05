@@ -169,6 +169,21 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run tauri build -- --target universal-apple-darwin
 
+      # Tauri notarizes and staples the .app, then only SIGNS the dmg it
+      # builds from it. Notarize the dmg container too so `spctl -t install`
+      # accepts the dmg itself, not just the app inside.
+      - name: Notarize and staple the dmg container
+        if: env.APPLE_SIGNING == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          DMG="$(ls src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg)"
+          xcrun notarytool submit "$DMG" --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple "$DMG"
+
       - name: Build universal .dmg (unsigned)
         if: env.APPLE_SIGNING != 'true'
         run: npm run tauri build -- --target universal-apple-darwin
