@@ -98,16 +98,24 @@ the UI -- turn it on for production publishers.
 
 **Windows:** download the `.msi` or `-setup.exe` installer from
 [Releases](https://github.com/Karmatek-Consulting-LLC/axlrows/releases).
-Release installers are code-signed (Azure Trusted Signing on Windows, Apple
-Developer ID + notarization on macOS) — see [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
 
-Otherwise, grab a bundle from `src-tauri/target/release/bundle/` after building, or:
+**macOS:** download the universal `.dmg` from
+[Releases](https://github.com/Karmatek-Consulting-LLC/axlrows/releases), open
+it, and drag AXLRows to Applications. Runs natively on Apple silicon and Intel.
+
+**Linux:** download the `.deb`, `.rpm`, or `.AppImage` from
+[Releases](https://github.com/Karmatek-Consulting-LLC/axlrows/releases):
 
 ```bash
-sudo dpkg -i AXLRows_0.1.0_amd64.deb     # Debian/Ubuntu
-sudo rpm -i AXLRows-0.1.0-1.x86_64.rpm   # Fedora/RHEL
-chmod +x AXLRows_0.1.0_amd64.AppImage    # anywhere
+sudo dpkg -i AXLRows_<version>_amd64.deb     # Debian/Ubuntu
+sudo rpm -i AXLRows-<version>-1.x86_64.rpm   # Fedora/RHEL
+chmod +x AXLRows_<version>_amd64.AppImage    # anywhere
 ```
+
+Release installers are code-signed (Azure Trusted Signing on Windows, Apple
+Developer ID + notarization on macOS) — see [docs/CODE_SIGNING.md](docs/CODE_SIGNING.md).
+Prefer building yourself? See [Build from source](#build-from-source); bundles
+land in `src-tauri/target/release/bundle/`.
 
 On Linux, a Secret Service provider (`gnome-keyring`, KWallet, etc.) is required
 for password storage. The app tells you if one isn't available rather than
