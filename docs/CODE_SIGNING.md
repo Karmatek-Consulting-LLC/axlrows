@@ -31,7 +31,7 @@ Dedicated resources (provisioned 2026-08-05):
 |---|---|
 | Resource group | `axlrows-signing` (eastus) |
 | Trusted Signing account | `axlrows-signing` · endpoint `https://eus.codesigning.azure.net` · Basic |
-| Certificate profile | `axlrows` (Public Trust) — pending identity validation |
+| Certificate profile | `axlrows` (Public Trust) — Active |
 | Entra app (CI signer) | `axlrows-release-signing`, GitHub-OIDC federated for `repo:Karmatek-Consulting-LLC/axlrows:environment:release`, "Artifact Signing Certificate Profile Signer" role on the account |
 
 Azure resource IDs (tenant, subscription, client ID) are deliberately not
@@ -43,38 +43,19 @@ with:
 az ad app list --display-name axlrows-release-signing --query '[0].appId' -o tsv
 ```
 
-### Remaining setup (in order)
+Identity validation note: Microsoft validates the **legal entity**, and a
+completed validation is honored across the tenant's accounts — the profile
+above was created against the entity's existing completed validation without
+a fresh review. The certificate itself is unique to this profile (own serial,
+thumbprint, and per-profile EKU OID); only the subject — the company name —
+is necessarily the same as any other Karma-Tek product's, since that's what
+identity validation attests.
 
-1. **Identity validation** (portal-only, no CLI): portal.azure.com → Trusted
-   Signing account `axlrows-signing` → Identity validation → new **Public
-   Trust** validation with Karma-Tek Consulting, LLC's registered details.
-   Usually completes same-day for an already-verified entity, but it gates
-   everything below. (Known quirk: the verify-email link can intermittently
-   return "The request is blocked" — a transient Microsoft WAF issue;
-   retrying the link resolves it.)
-
-2. **Certificate profile**, once validation shows Completed:
-
-   ```bash
-   az trustedsigning certificate-profile create \
-     -g axlrows-signing --account-name axlrows-signing \
-     -n axlrows --profile-type PublicTrust \
-     --identity-validation-id <id shown on the completed validation>
-   ```
-
-3. **Flip signing on** by setting the last repo variable (its absence is the
-   self-skip gate — until then releases build UNSIGNED with a warning):
-
-   ```bash
-   gh variable set AZURE_CLIENT_ID \
-     -b "$(az ad app list --display-name axlrows-release-signing --query '[0].appId' -o tsv)"
-   ```
-
-Already in place on the GitHub side: the `release` environment (restricted
-to `v*` tags — the OIDC federation subject only matches jobs in this
-environment, so nothing outside it can sign) and the `AZURE_TENANT_ID`,
-`AZURE_SUBSCRIPTION_ID`, `SIGNING_ENDPOINT`, `SIGNING_ACCOUNT_NAME`, and
-`SIGNING_CERT_PROFILE` variables.
+On the GitHub side: the `release` environment is restricted to `v*` tags
+(the OIDC federation subject only matches jobs in this environment, so
+nothing outside it can sign), and all six `AZURE_*`/`SIGNING_*` repository
+variables are set. `AZURE_CLIENT_ID` is the self-skip gate — unset it to
+build UNSIGNED test releases without touching Azure.
 
 ### How the workflow signs (and why not Tauri's `signCommand`)
 
@@ -159,10 +140,11 @@ developer.apple.com.
 - [x] GitHub: `release` environment created, restricted to `v*` tags, 2026-08-05
 - [x] GitHub: `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `SIGNING_*`
       repository variables set, 2026-08-05
-- [ ] Azure: **Public Trust identity validation** (portal — the long pole,
-      start first)
-- [ ] Azure: certificate profile `axlrows` created (needs the validation ID)
-- [ ] GitHub: `AZURE_CLIENT_ID` variable set — flips Windows signing on
+- [x] Azure: Public Trust identity validation — existing completed entity
+      validation honored for the new account, 2026-08-05
+- [x] Azure: certificate profile `axlrows` created, cert Active, 2026-08-05
+- [x] GitHub: `AZURE_CLIENT_ID` variable set — **Windows signing is live**,
+      2026-08-05
 - [ ] Apple: Developer Program enrollment (identity verification can take a
       day or two — start early)
 - [ ] Apple: Developer ID Application cert created + exported
